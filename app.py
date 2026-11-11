@@ -841,6 +841,19 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
 COLOR_MAPA = {0: [214, 40, 40, 230], 1: [245, 130, 32, 230], 2: [34, 160, 80, 230], 3: [110, 120, 130, 220]}
 
 
+def _vista_mapa(m):
+    """Encuadre del mapa calculado a mano (pydeck falla cuando hay 1 o 2 puntos). Funciona con cualquier cantidad."""
+    import math
+    lat, lon = m["lat"].astype(float), m["lon"].astype(float)
+    if len(m) >= 20:                                   # con muchas unidades, ignora las más alejadas (2.5 % por lado)
+        lat0, lat1, lon0, lon1 = lat.quantile(0.025), lat.quantile(0.975), lon.quantile(0.025), lon.quantile(0.975)
+    else:
+        lat0, lat1, lon0, lon1 = lat.min(), lat.max(), lon.min(), lon.max()
+    span = max(lat1 - lat0, lon1 - lon0, 0.02) * 1.35  # grados; mínimo para que 1 punto no quede pegado
+    zoom = max(3.0, min(12.0, math.log2(972 / span)))
+    return pdk.ViewState(latitude=float((lat0 + lat1) / 2), longitude=float((lon0 + lon1) / 2), zoom=zoom)
+
+
 def dibujar_mapa(d, con_alias):
     """Mapa: un punto por unidad con su alias. Color = semáforo (rojo/naranja/verde) o gris si no tiene viaje."""
     m = d.dropna(subset=["latitud", "longitud"]).rename(columns={"latitud": "lat", "longitud": "lon"})
@@ -855,7 +868,7 @@ def dibujar_mapa(d, con_alias):
                                get_size=13, get_color=[20, 20, 20, 255], get_pixel_offset=[0, -14],
                                get_text_anchor="'middle'", get_alignment_baseline="'bottom'",
                                font_weight=700, pickable=False))
-    vista = pdk.data_utils.compute_view(m[["lon", "lat"]], 0.95)
+    vista = _vista_mapa(m)
     st.pydeck_chart(pdk.Deck(layers=capas, initial_view_state=vista, map_style="light", tooltip={"text": "{tip}"}))
 
 
