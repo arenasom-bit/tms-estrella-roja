@@ -334,15 +334,22 @@ def panel_zam():
 def aviso_nube():
     """Barra lateral: si la base en internet esta conectada y al dia."""
     if not nube.activa():
+        if USR.get("perfil") == "MASTER":
+            d = nube.diagnostico()
+            st.caption("☁️ Base en internet: **NO conectada** · "
+                       f"TURSO_URL {'✅' if d['TURSO_URL'] else '❌'} · TURSO_TOKEN {'✅' if d['TURSO_TOKEN'] else '❌'}"
+                       + (f" · Secrets que ve la app: {', '.join(d['secrets']) or 'ninguno'}"))
         return
     e = nube.estado()
     pend = nube.pendientes(bd.RUTA_BD)
     if not e["lista"]:
         st.warning("☁️ La base en internet está vacía o no responde. Lo que captures se queda solo en esta computadora. "
-                   "Sube los datos con `py nube.py subir` (ver manual).")
+                   "Sube los datos con `py nube.py subir` (ver manual)."
+                   + (f"  \nDetalle: {e['error'][:160]}" if USR.get("perfil") == "MASTER" and e["error"] else ""))
     elif pend or e["error"]:
         st.warning(f"☁️ Sin conexión con la base en internet: {pend} cambio(s) esperando para subirse. "
-                   "Se mandan solos cuando regrese la conexión.")
+                   "Se mandan solos cuando regrese la conexión."
+                   + (f"  \nDetalle: {e['error'][:160]}" if USR.get("perfil") == "MASTER" and e["error"] else ""))
     else:
         st.caption("☁️ Base en internet: conectada y al día" +
                    (f" · último envío {e['ultimo_envio'][11:16]}" if e["ultimo_envio"] else ""))

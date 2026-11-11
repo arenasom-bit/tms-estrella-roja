@@ -58,6 +58,18 @@ def _dato(nombre):
     return v
 
 
+def diagnostico():
+    """Para la pantalla: que datos de conexion ve el TMS (solo SI/NO y nombres, nunca los valores)."""
+    claves = []
+    try:
+        import streamlit as st
+        claves = sorted(str(k) for k in st.secrets.keys())
+    except Exception as e:
+        claves = [f"(no se pudieron leer los Secrets: {type(e).__name__})"]
+    return {"TURSO_URL": bool(_dato("TURSO_URL")), "TURSO_TOKEN": bool(_dato("TURSO_TOKEN")), "secrets": claves,
+            "error": _estado["error"]}
+
+
 def url():
     u = _dato("TURSO_URL")
     return ("https://" + u[len("libsql://"):]) if u.startswith("libsql://") else u.rstrip("/")
