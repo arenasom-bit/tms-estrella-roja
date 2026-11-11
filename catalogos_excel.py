@@ -23,11 +23,22 @@ from openpyxl.worksheet.datavalidation import DataValidation
 import base_datos as bd
 from columnas import CATALOGOS, SITUACIONES
 
+# Otros nombres que aceptan las hojas y los encabezados (ej. el Excel de flota con hojas TRACTO y REMOLQUES:
+# ECO | PLACAS | ESTATUS FLOTAS)
+HOJAS_ALIAS = {"TRACTO": "VEHICULOS", "TRACTOS": "VEHICULOS", "UNIDADES": "VEHICULOS", "VEHÍCULOS": "VEHICULOS"}
+ENCABEZADOS_ALIAS = {
+    "unidades": {"ESTATUS FLOTAS": "situacion", "ESTATUS FLOTA": "situacion", "ESTATUS": "situacion",
+                 "SITUACIÓN": "situacion", "UNIDAD": "eco"},
+    "remolques": {"ECO": "remolque", "CAJA": "remolque", "ESTATUS FLOTAS": "situacion", "ESTATUS FLOTA": "situacion",
+                  "ESTATUS": "situacion", "SITUACIÓN": "situacion"},
+}
+SIN_DATO = {"N/A", "NA", "-", "PTE", "S/P", "SIN PLACAS"}
+
 # nombre de hoja -> (tabla, {columna_bd: encabezado en el Excel})
 HOJAS = {
     "VEHICULOS": ("unidades", {"eco": "ECO", "operador": "OPERADOR HABITUAL", "situacion": "SITUACION",
                                "placas": "PLACAS"}),
-    "REMOLQUES": ("remolques", {"remolque": "REMOLQUE", "tipo": "TIPO"}),
+    "REMOLQUES": ("remolques", {"remolque": "REMOLQUE", "tipo": "TIPO", "placas": "PLACAS", "situacion": "SITUACION"}),
     "OPERADORES": ("operadores", {"nomina": "NOMINA", "nombre": "NOMBRE", "telefono": "TELEFONO"}),
     "CLIENTES": ("clientes", {"nombre": "CLIENTE", "rfc": "RFC"}),
     "ORIGENES": ("origenes", {"nombre": "ORIGEN", "direccion": "DIRECCION", "link": "LINK"}),
@@ -47,7 +58,8 @@ INSTRUCCIONES = [
     "5. En el TMS, pestana Catalogos > 'Cargar catalogos desde Excel', sube este archivo.",
     "6. Cargar NUNCA borra nada: agrega lo nuevo y completa lo que falte. Si un registro ya existe, solo se llenan sus datos vacios o cambiados.",
     "7. Para BORRAR un registro hazlo directo en la tabla del TMS (pestana Catalogos).",
-    "8. SITUACION de cada vehiculo: OPERANDO, CORRALON, SINIESTRO, TALLER o NO DISPONIBLE (si la dejas vacia se toma como OPERANDO).",
+    "8. SITUACION de cada vehiculo y remolque: OPERANDO, CORRALON, SINIESTRO, TALLER o NO DISPONIBLE (si la dejas vacia se toma como OPERANDO; INOPERANDO cuenta como NO DISPONIBLE).",
+    "   Tambien se acepta el Excel de flota con hojas TRACTO y REMOLQUES (ECO | PLACAS | ESTATUS FLOTAS).",
     "9. Escribe los nombres EXACTAMENTE como quieres verlos en las listas (mayusculas, sin espacios de mas).",
 ]
 
@@ -161,18 +173,33 @@ def catalogos_desde_historico(df):
 def leer_archivo(archivo):
     """Devuelve (tipo_de_archivo, {tabla: DataFrame})."""
     xl = pd.ExcelFile(archivo)
-    hojas = {h.strip().upper(): h for h in xl.sheet_names}
+    hojas = {}
+    for h in xl.sheet_names:
+        nombre = h.strip().upper()
+        hojas.setdefault(HOJAS_ALIAS.get(nombre, nombre), h)
     frames = {}
     for hoja, (tabla, mapa) in HOJAS.items():
         if hoja not in hojas:
             continue
         df = xl.parse(hojas[hoja], dtype=str)
-        df.columns = [str(c).strip().upper() for c in df.columns]
+        df.columns = [" ".join(str(c).split()).upper() for c in df.columns]
         inverso = {v.upper(): k for k, v in mapa.items()}
         inverso.update({k.upper(): k for k in mapa})
+        for enc, col in ENCABEZADOS_ALIAS.get(tabla, {}).items():
+            if enc not in inverso and col not in df.columns:
+                inverso[enc] = col
         df = df.rename(columns=inverso)
+        df = df.loc[:, ~df.columns.duplicated()]
         if mapa and list(mapa)[0] in df.columns:
-            frames[tabla] = df[[c for c in mapa if c in df.columns]]
+            df = df[[c for c in mapa if c in df.columns]].copy()
+            for c in df.columns:                       # textos limpios; "N/A" = sin dato
+                df[c] = df[c].map(lambda v: None if v is None or (isinstance(v, float) and pd.isna(v))
+                                  or " ".join(str(v).split()).upper() in SIN_DATO
+                                  else " ".join(str(v).split()))
+            llave = list(mapa)[0]
+            if llave in ("eco", "remolque"):
+                df[llave] = df[llave].map(lambda v: v.upper().removesuffix(".0") if v else v)
+            frames[tabla] = df[df[llave].notna()]
     if frames:
         return "plantilla", frames
 

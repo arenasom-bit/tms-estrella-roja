@@ -19,13 +19,17 @@ def situacion_valida(valor):
     """Acepta 'taller', 'Corralón', etc. Devuelve la opcion correcta o None."""
     if valor is None:
         return None
-    t = str(valor).strip().upper().replace("Ó", "O")
+    t = " ".join(str(valor).strip().upper().replace("Ó", "O").split())
+    t = {"INOPERANDO": "NO DISPONIBLE", "INOPERATIVO": "NO DISPONIBLE", "BAJA": "NO DISPONIBLE",
+         "EN TALLER": "TALLER", "SINIESTRADO": "SINIESTRO"}.get(t, t)
     return t if t in SITUACIONES else None
 
 
 def _situacion_por_defecto(con):
-    """Vehiculo sin situacion = OPERANDO."""
+    """Vehiculo o remolque sin situacion = OPERANDO."""
     con.execute("UPDATE unidades SET situacion = 'OPERANDO' WHERE situacion IS NULL OR TRIM(situacion) = ''")
+    if "situacion" in {f[1] for f in con.execute("PRAGMA table_info(remolques)")}:
+        con.execute("UPDATE remolques SET situacion = 'OPERANDO' WHERE situacion IS NULL OR TRIM(situacion) = ''")
 
 
 @contextmanager
@@ -302,7 +306,7 @@ def reemplazar_catalogo(tabla, df):
             vals = [normalizar(fila.get(c)) for c in cols]
             if vals[0] is None:
                 continue
-            if tabla == "unidades":
+            if "situacion" in cols:
                 vals[cols.index("situacion")] = situacion_valida(vals[cols.index("situacion")])
             marcas = ", ".join("?" for _ in cols)
             con.execute(f"INSERT OR REPLACE INTO {tabla} ({', '.join(cols)}) VALUES ({marcas})", vals)
@@ -319,7 +323,7 @@ def catalogo_upsert(tabla, df):
             vals = {c: normalizar(fila.get(c)) for c in cols}
             if vals[llave] is None:
                 continue
-            if tabla == "unidades":
+            if "situacion" in cols:
                 vals["situacion"] = situacion_valida(vals["situacion"])
             actual = con.execute(
                 f"SELECT {', '.join(cols)} FROM {tabla} WHERE {llave} = ?", [vals[llave]]

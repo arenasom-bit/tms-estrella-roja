@@ -95,7 +95,7 @@ SITUACIONES = ["OPERANDO", "CORRALON", "SINIESTRO", "TALLER", "NO DISPONIBLE"]
 # Catalogos: tabla -> columnas (la primera es la llave unica, no se repite)
 CATALOGOS = {
     "unidades": ["eco", "operador", "situacion", "placas"],   # placas = assets_id de la vista ZAM
-    "remolques": ["remolque", "tipo"],
+    "remolques": ["remolque", "tipo", "placas", "situacion"],   # situacion: solo OPERANDO se puede asignar
     "operadores": ["nomina", "nombre", "telefono"],
     "clientes": ["nombre", "rfc"],
     "origenes": ["nombre", "direccion", "link"],

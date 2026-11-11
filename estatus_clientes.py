@@ -69,7 +69,7 @@ PEPSICO_DED_COLS = [Col("eco", "ECO", "manual"), Col("operador", "OPERADOR", "se
                     Col("llegada_descarga", "LLEGADA A DESCARGA", "semi"), Col("comentario", "OBSERVACIONES", "manual")]
 
 PEPSICO_SPOT_COLS = [Col("eco", "ECO", "manual"), Col("operador", "OPERADOR", "semi"), Col("remolque", "REMOLQUE", "semi"),
-                     Col("placas_remolque", "PLACAS DE REMOLQUE", "manual"), Col("origen", "ORIGEN", "semi"),
+                     Col("placas_remolque", "PLACAS DE REMOLQUE", "semi"), Col("origen", "ORIGEN", "semi"),
                      Col("destino", "DESTINO", "semi"), Col("modalidad", "MODALIDAD", "semi"),
                      Col("folio", "FOLIO DEL CLIENTE", "semi"), Col("status", "ESTATUS", "semi"),
                      Col("ubicacion", "UBICACIÓN UNIDAD", "auto"), Col("cita_carga", "CITA DE CARGA", "semi"),
@@ -306,6 +306,8 @@ class Fuentes:
         self.habitual = {_k(e): o for e, o in zip(uni["eco"], uni["operador"]) if _t(o)}
         ops = bd.leer_catalogo("operadores")
         self.telefono = {_k(n): t for n, t in zip(ops["nombre"], ops["telefono"]) if _t(t)}
+        rem = bd.leer_catalogo("remolques")
+        self.placas_remolque = {_k(r): p for r, p in zip(rem["remolque"], rem["placas"]) if _t(p)}
         self.pos = _posiciones_por_eco()
         self.lugares = leer_lugares()
 
@@ -513,6 +515,8 @@ def _armar_pepsico(d, f, cols, seccion):
         man.pop("status", None)
     for c in cols:
         _poner(fila, c.clave, auto.get(c.clave, "") if c.modo != "manual" else "", man)
+    if "placas_remolque" in fila and not fila["placas_remolque"]:      # placas del catalogo de remolques
+        fila["placas_remolque"] = f.placas_remolque.get(_k(fila.get("remolque")), "")
     fila["status"] = fila.get("status", "")[:MAX_ESTATUS]
     return fila, auto
 

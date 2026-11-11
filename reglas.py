@@ -42,6 +42,8 @@ class Contexto:
         uni = bd.leer_catalogo("unidades")
         self.situacion = {_k(e): (_k(s) or "OPERANDO") for e, s in zip(uni["eco"], uni["situacion"])}
         self.operador_habitual = {_k(e): o for e, o in zip(uni["eco"], uni["operador"]) if _k(o)}
+        rem = bd.leer_catalogo("remolques")
+        self.situacion_remolque = {_k(r): (_k(s) or "OPERANDO") for r, s in zip(rem["remolque"], rem["situacion"])}
         ops = bd.leer_catalogo("operadores")
         self.nomina_de = {_k(n): _k(m) for n, m in zip(ops["nombre"], ops["nomina"]) if _k(n)}
         self.nombre_de = {_k(m): n for m, n in zip(ops["nomina"], ops["nombre"]) if _k(m) and _k(n)}
@@ -99,7 +101,8 @@ class Contexto:
                 and self._viaje_zam("nomina", nomina) is None)
 
     def remolque_asignable(self, remolque):
-        return self._viaje_tms("remolque_1", _k(remolque), None) is None
+        k = _k(remolque)
+        return self.situacion_remolque.get(k, "OPERANDO") == "OPERANDO" and self._viaje_tms("remolque_1", k, None) is None
 
     def ecos_activos_zam(self):
         return set(self.zam["eco"].map(_k)) - {""} if not self.zam.empty else set()
@@ -164,6 +167,10 @@ def validar(propuestas, ctx=None):
             usados["operador"][llave] = etq
 
         if remolque:
+            sit_r = ctx.situacion_remolque.get(remolque, "OPERANDO")
+            if sit_r != "OPERANDO":
+                errores.append(f"{etq}: el remolque {p['remolque_1']} está en situación {sit_r}; "
+                               "solo se asignan remolques OPERANDO.")
             v = ctx._viaje_tms("remolque_1", remolque, id_)
             if v is not None:
                 errores.append(f"{etq}: el remolque {p['remolque_1']} sigue activo en el {_desc_tms(v)}. "

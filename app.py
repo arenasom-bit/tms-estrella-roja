@@ -1337,7 +1337,9 @@ if "cat" in T:
             "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES),
             "placas": "PLACAS"})
     with sub[1]:
-        editor_catalogo("remolques", {"remolque": "REMOLQUE", "tipo": "TIPO"})
+        st.caption("Solo los remolques en SITUACIÓN = OPERANDO se pueden asignar a un viaje.")
+        editor_catalogo("remolques", {"remolque": "REMOLQUE", "tipo": "TIPO", "placas": "PLACAS",
+                                      "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES)})
     with sub[2]:
         editor_catalogo("operadores", {"nomina": "NÓMINA", "nombre": "NOMBRE", "telefono": "TELÉFONO"})
     with sub[3]:
