@@ -52,8 +52,10 @@ def _dato(nombre):
             v = st.secrets.get(nombre)
         except Exception:
             v = None
-    _cache[nombre] = (v or "").strip()
-    return _cache[nombre]
+    v = (v or "").strip()
+    if v:                                      # solo se recuerda si ya existe (los Secrets pueden llegar despues)
+        _cache[nombre] = v
+    return v
 
 
 def url():
