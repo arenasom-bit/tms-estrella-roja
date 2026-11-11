@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 import configuracion as cfg
+import nube
 from columnas import COLUMNAS, TIPO_POR_CLAVE, CATALOGOS, SITUACIONES
 
 RUTA_BD = Path(__file__).parent / cfg.ARCHIVO_BD
@@ -34,7 +35,7 @@ def _situacion_por_defecto(con):
 
 @contextmanager
 def conexion():
-    con = sqlite3.connect(RUTA_BD, timeout=30)
+    con = sqlite3.connect(RUTA_BD, timeout=30, factory=nube.ConexionNube)   # lo que se guarda tambien va a internet
     try:
         yield con
         con.commit()
@@ -46,7 +47,13 @@ def conexion():
 
 
 # ---------------------------------------------------------- crear tablas
+def refrescar_desde_nube():
+    """Si la base de internet tiene cambios de otra computadora, los baja a tms.db. Devuelve True si bajo algo."""
+    return nube.refrescar(RUTA_BD)
+
+
 def crear_tablas():
+    refrescar_desde_nube()
     guardables = [c for c in COLUMNAS if c.tipo != "calculado"]
     with conexion() as con:
         con.execute("PRAGMA journal_mode=WAL")

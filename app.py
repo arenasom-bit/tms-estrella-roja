@@ -16,6 +16,7 @@ import configuracion as cfg
 import estatus_clientes as ec
 import estilo
 import importar_plan
+import nube
 import omnitracs
 import reglas
 import zam
@@ -322,6 +323,26 @@ def panel_zam():
             st.error(f"No se pudo actualizar desde ZAM: {e}")
 
 
+
+def aviso_nube():
+    """Barra lateral: si la base en internet esta conectada y al dia."""
+    if not nube.activa():
+        return
+    e = nube.estado()
+    pend = nube.pendientes(bd.RUTA_BD)
+    if not e["lista"]:
+        st.warning("☁️ La base en internet está vacía o no responde. Lo que captures se queda solo en esta computadora. "
+                   "Sube los datos con `py nube.py subir` (ver manual).")
+    elif pend or e["error"]:
+        st.warning(f"☁️ Sin conexión con la base en internet: {pend} cambio(s) esperando para subirse. "
+                   "Se mandan solos cuando regrese la conexión.")
+    else:
+        st.caption("☁️ Base en internet: conectada y al día" +
+                   (f" · último envío {e['ultimo_envio'][11:16]}" if e["ultimo_envio"] else ""))
+
+
+with st.sidebar:
+    aviso_nube()
 
 if perm["zam"]:
     with st.sidebar:
