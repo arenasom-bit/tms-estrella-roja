@@ -42,6 +42,29 @@ _estado = {"version": None, "ultimo_envio": None, "error": "", "ultima_revision"
 _cache = {}
 
 
+def _limpiar(nombre, v):
+    """Quita lo que se cuela al copiar y pegar (comillas tipograficas, espacios invisibles, letras 'anchas')."""
+    import unicodedata
+    v = unicodedata.normalize("NFKC", str(v or ""))
+    if nombre == "TURSO_TOKEN":                # un token solo tiene letras, numeros, punto, guion y guion bajo
+        return re.sub(r"[^A-Za-z0-9._-]", "", v)
+    return re.sub(r"[\s\"'\u2018\u2019\u201c\u201d\u200b\ufeff]", "", v)
+
+
+def forma_del_token():
+    """Para diagnosticar SIN mostrar el token: largo y caracteres raros que traia."""
+    crudo = os.environ.get("TURSO_TOKEN") or getattr(_local, "TURSO_TOKEN", None)
+    if not crudo:
+        try:
+            import streamlit as st
+            crudo = st.secrets.get("TURSO_TOKEN")
+        except Exception:
+            crudo = ""
+    crudo = str(crudo or "")
+    raros = sorted({f"U+{ord(c):04X}" for c in crudo if not (c.isascii() and (c.isalnum() or c in "._-"))})
+    return {"largo": len(crudo), "largo_limpio": len(_limpiar("TURSO_TOKEN", crudo)), "raros": raros[:15]}
+
+
 def _dato(nombre):
     if nombre in _cache:
         return _cache[nombre]
@@ -52,7 +75,7 @@ def _dato(nombre):
             v = st.secrets.get(nombre)
         except Exception:
             v = None
-    v = (v or "").strip()
+    v = _limpiar(nombre, v)
     if v:                                      # solo se recuerda si ya existe (los Secrets pueden llegar despues)
         _cache[nombre] = v
     return v
@@ -344,7 +367,7 @@ def refrescar(ruta_bd, cada_segundos=5):
     except Exception as e:
         import traceback
         _estado["error"] = f"{time.strftime('%H:%M:%S')} - {type(e).__name__}: {e}"
-        _diag("error", traceback.format_exc())
+        _diag("error", f"token {forma_del_token()} · " + traceback.format_exc())
         return False
 
 
