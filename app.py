@@ -1459,38 +1459,37 @@ if "exp" in T:
 if "seg" in T and es_master:        # doble candado: la pestaña solo existe para MASTER y se revisa otra vez aquí
   with T["seg"]:
     st.subheader("Usuarios y bitácora")
-    sub_u, sub_m, sub_b, sub_r = st.tabs(["👥 Usuarios", "📥 Carga masiva de usuarios", "🧾 Bitácora (quién hizo qué)",
-                                          "💾 Respaldos"])
-    with sub_m:
-        st.caption("Da de alta o actualiza muchos usuarios a la vez desde Excel. Columnas: USUARIO · NOMBRE · PERFIL · "
-                   "CONTRASEÑA · ACTIVO. Un usuario que ya existe solo cambia su contraseña si escribes una nueva. "
-                   "Los usuarios MASTER no se tocan.")
-        m1, m2, _ = st.columns([1.3, 2, 3])
-        m1.download_button("⬇️ Plantilla vacía", usuarios_excel.plantilla(False), file_name="plantilla_usuarios.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        m2.download_button("⬇️ Usuarios actuales (sin contraseñas)", usuarios_excel.plantilla(True),
-                           file_name=f"usuarios_{date.today()}.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        arch_u = st.file_uploader("Sube el Excel de usuarios", type=["xlsx"], key="usuarios_excel")
-        if arch_u is not None:
-            try:
-                df_u = usuarios_excel.leer(arch_u)
-                det = usuarios_excel.revisar(df_u)
-                st.dataframe(pd.DataFrame([d[:4] for d in det], columns=["FILA", "USUARIO", "QUÉ PASA", "DETALLE"]),
-                             hide_index=True)
-                n_ok = sum(1 for d in det if d[4] is not None and not d[2].startswith("="))
-                n_mal = sum(1 for d in det if d[4] is None)
-                if n_mal:
-                    st.warning(f"{n_mal} fila(s) no se van a cargar (ver ❌). Corrígelas en el Excel y vuelve a subirlo, "
-                               "o carga solo las correctas.")
-                if st.button(f"✅ Cargar {n_ok} usuario(s)", type="primary", disabled=n_ok == 0, key="usuarios_cargar"):
-                    nuevos, act, err, _ = usuarios_excel.cargar(df_u, USR)
-                    st.session_state.mensaje = (f"Usuarios cargados ✅  Nuevos: {nuevos} · Actualizados: {act}"
-                                                + (f" · Con error (no se cargaron): {err}" if err else "")
-                                                + ". Borra el Excel: tiene contraseñas.")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"No se pudo leer el archivo: {e}")
+    sub_u, sub_b, sub_r = st.tabs(["👥 Usuarios", "🧾 Bitácora (quién hizo qué)", "💾 Respaldos"])
+    with sub_u, st.expander("📥 Carga masiva de usuarios desde Excel (catálogo de usuarios)"):
+            st.caption("Da de alta o actualiza muchos usuarios a la vez desde Excel. Columnas: USUARIO · NOMBRE · PERFIL · "
+                       "CONTRASEÑA · ACTIVO. Un usuario que ya existe solo cambia su contraseña si escribes una nueva. "
+                       "Los usuarios MASTER no se tocan.")
+            m1, m2, _ = st.columns([1.3, 2, 3])
+            m1.download_button("⬇️ Plantilla vacía", usuarios_excel.plantilla(False), file_name="plantilla_usuarios.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            m2.download_button("⬇️ Usuarios actuales (sin contraseñas)", usuarios_excel.plantilla(True),
+                               file_name=f"usuarios_{date.today()}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            arch_u = st.file_uploader("Sube el Excel de usuarios", type=["xlsx"], key="usuarios_excel")
+            if arch_u is not None:
+                try:
+                    df_u = usuarios_excel.leer(arch_u)
+                    det = usuarios_excel.revisar(df_u)
+                    st.dataframe(pd.DataFrame([d[:4] for d in det], columns=["FILA", "USUARIO", "QUÉ PASA", "DETALLE"]),
+                                 hide_index=True)
+                    n_ok = sum(1 for d in det if d[4] is not None and not d[2].startswith("="))
+                    n_mal = sum(1 for d in det if d[4] is None)
+                    if n_mal:
+                        st.warning(f"{n_mal} fila(s) no se van a cargar (ver ❌). Corrígelas en el Excel y vuelve a subirlo, "
+                                   "o carga solo las correctas.")
+                    if st.button(f"✅ Cargar {n_ok} usuario(s)", type="primary", disabled=n_ok == 0, key="usuarios_cargar"):
+                        nuevos, act, err, _ = usuarios_excel.cargar(df_u, USR)
+                        st.session_state.mensaje = (f"Usuarios cargados ✅  Nuevos: {nuevos} · Actualizados: {act}"
+                                                    + (f" · Con error (no se cargaron): {err}" if err else "")
+                                                    + ". Borra el Excel: tiene contraseñas.")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"No se pudo leer el archivo: {e}")
 
     with sub_r:
         st.caption(f"Respaldo automático una vez al día, de madrugada ({getattr(cfg, 'RESPALDO_HORA_INICIO', 2)}:00 a "
