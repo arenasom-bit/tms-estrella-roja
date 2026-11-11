@@ -49,7 +49,9 @@ DIAS_ATRAS_ABIERTOS = 15         # viajes sin terminar se arrastran hasta 15 dia
 
 # ---- Archivos ----
 ARCHIVO_BD = "tms.db"            # aqui se guarda TODA tu informacion (los viajes nunca se borran solos)
-RESPALDOS_DIAS = 150             # copias diarias de tms.db que se guardan en la carpeta respaldos (150 = 5 meses)
+RESPALDOS_DIAS = 150             # respaldos que se conservan (150 dias = 5 meses); los mas viejos se borran solos
+RESPALDO_HORA_INICIO = 2         # el respaldo automatico se hace 1 vez al dia entre estas horas (centro de Mexico),
+RESPALDO_HORA_FIN = 5            # de madrugada, cuando nadie usa el TMS
 
 # ---- Coincidencias con ZAM (el TMS NO sustituye a ZAM: solo toma datos de el) ----
 # Si un viaje del plan no tiene PEDIDO pero coincide con un viaje de ZAM (misma unidad y

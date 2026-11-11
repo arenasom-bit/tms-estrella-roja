@@ -19,6 +19,8 @@ import importar_plan
 import nube
 import omnitracs
 import reglas
+import respaldos
+import usuarios_excel
 import zam
 from columnas import (CATALOGO_DE, CATALOGOS, COLUMNAS, CONTEXTO, ESTATUS_CERRADOS, FICHA_REQUERIDOS, LISTAS,
                       PENDIENTES, PERMISOS, PESTANAS, ROLES, SITUACIONES, TIPO_POR_CLAVE, TITULO_POR_CLAVE)
@@ -27,10 +29,6 @@ st.set_page_config(page_title="TMS · Estrella Roja",
                    page_icon=str(estilo.ISOTIPO) if estilo.ISOTIPO.exists() else "🚛", layout="wide")
 bd.crear_tablas()
 ec.crear_tabla()
-try:
-    bd.respaldo_diario()          # copia de seguridad de tms.db (1 por dia, guarda RESPALDOS_DIAS)
-except Exception:
-    pass
 estilo.aplicar()
 
 
@@ -52,6 +50,15 @@ def _hilo_ubicaciones():
 
 if getattr(cfg, "UBICACION_EN_TEXTO", True):
     _hilo_ubicaciones()
+
+
+@st.cache_resource(show_spinner=False)
+def _hilo_respaldos():
+    """Un solo hilo por servidor: respaldo automatico una vez al dia, de madrugada (ver respaldos.py)."""
+    return respaldos.iniciar()
+
+
+_hilo_respaldos()
 
 if "version" not in st.session_state:
     st.session_state.version = 0
@@ -1452,7 +1459,74 @@ if "exp" in T:
 if "seg" in T and es_master:        # doble candado: la pestaña solo existe para MASTER y se revisa otra vez aquí
   with T["seg"]:
     st.subheader("Usuarios y bitácora")
-    sub_u, sub_b = st.tabs(["👥 Usuarios", "🧾 Bitácora (quién hizo qué)"])
+    sub_u, sub_m, sub_b, sub_r = st.tabs(["👥 Usuarios", "📥 Carga masiva de usuarios", "🧾 Bitácora (quién hizo qué)",
+                                          "💾 Respaldos"])
+    with sub_m:
+        st.caption("Da de alta o actualiza muchos usuarios a la vez desde Excel. Columnas: USUARIO · NOMBRE · PERFIL · "
+                   "CONTRASEÑA · ACTIVO. Un usuario que ya existe solo cambia su contraseña si escribes una nueva. "
+                   "Los usuarios MASTER no se tocan.")
+        m1, m2, _ = st.columns([1.3, 2, 3])
+        m1.download_button("⬇️ Plantilla vacía", usuarios_excel.plantilla(False), file_name="plantilla_usuarios.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        m2.download_button("⬇️ Usuarios actuales (sin contraseñas)", usuarios_excel.plantilla(True),
+                           file_name=f"usuarios_{date.today()}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        arch_u = st.file_uploader("Sube el Excel de usuarios", type=["xlsx"], key="usuarios_excel")
+        if arch_u is not None:
+            try:
+                df_u = usuarios_excel.leer(arch_u)
+                det = usuarios_excel.revisar(df_u)
+                st.dataframe(pd.DataFrame([d[:4] for d in det], columns=["FILA", "USUARIO", "QUÉ PASA", "DETALLE"]),
+                             hide_index=True)
+                n_ok = sum(1 for d in det if d[4] is not None and not d[2].startswith("="))
+                n_mal = sum(1 for d in det if d[4] is None)
+                if n_mal:
+                    st.warning(f"{n_mal} fila(s) no se van a cargar (ver ❌). Corrígelas en el Excel y vuelve a subirlo, "
+                               "o carga solo las correctas.")
+                if st.button(f"✅ Cargar {n_ok} usuario(s)", type="primary", disabled=n_ok == 0, key="usuarios_cargar"):
+                    nuevos, act, err, _ = usuarios_excel.cargar(df_u, USR)
+                    st.session_state.mensaje = (f"Usuarios cargados ✅  Nuevos: {nuevos} · Actualizados: {act}"
+                                                + (f" · Con error (no se cargaron): {err}" if err else "")
+                                                + ". Borra el Excel: tiene contraseñas.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"No se pudo leer el archivo: {e}")
+
+    with sub_r:
+        st.caption(f"Respaldo automático una vez al día, de madrugada ({getattr(cfg, 'RESPALDO_HORA_INICIO', 2)}:00 a "
+                   f"{getattr(cfg, 'RESPALDO_HORA_FIN', 5)}:00, hora del centro de México), cuando nadie usa el TMS. "
+                   f"Se guardan máximo {respaldos.dias()} días; los más viejos se borran solos. "
+                   + ("Se guardan en la base de internet, así que no se pierden si la página se reinicia."
+                      if nube.activa() else "⚠️ Sin base en internet: se guardan solo en la carpeta respaldos de esta computadora."))
+        st.info("🔔 Antes de modificar el TMS (cambios en GitHub), haz un respaldo con el botón de abajo.")
+        if st.button("💾 Hacer respaldo ahora", type="primary", key="resp_ahora"):
+            with st.spinner("Haciendo respaldo..."):
+                st.session_state.mensaje = respaldos.hacer("MANUAL", USR)
+            st.rerun()
+        lista_r = respaldos.listar()
+        if not lista_r:
+            st.info("Todavía no hay respaldos.")
+        else:
+            st.dataframe(pd.DataFrame(lista_r).rename(columns={"fecha": "FECHA", "motivo": "MOTIVO", "quien": "QUIÉN",
+                                                               "viajes": "VIAJES", "kb": "TAMAÑO (KB)", "donde": "DÓNDE"}),
+                         hide_index=True, height=260)
+            etiquetas_r = {i: f"{r['fecha']} · {r['motivo'] or ''} · {r['donde']}" for i, r in enumerate(lista_r)}
+            elegido_r = st.selectbox("Respaldo", list(etiquetas_r), format_func=etiquetas_r.get, key="resp_sel")
+            r1, r2 = st.columns(2)
+            if r1.button("⬇️ Preparar descarga", key="resp_desc"):
+                st.session_state.resp_bytes = (elegido_r, respaldos.descargar(lista_r[elegido_r]))
+            if st.session_state.get("resp_bytes", (None,))[0] == elegido_r:
+                r1.download_button("💾 Descargar archivo .db", st.session_state.resp_bytes[1],
+                                   file_name=f"tms_respaldo_{lista_r[elegido_r]['fecha'][:16].replace(' ', '_').replace(':', '')}.db")
+            confirmar = r2.text_input("Para restaurar escribe RESTAURAR", key="resp_conf",
+                                      help="Regresa TODO el TMS (plan, catálogos, usuarios, estatus) a como estaba en ese "
+                                           "respaldo. Antes se hace un respaldo de cómo está ahora, por si acaso.")
+            if r2.button("↩️ Restaurar este respaldo", disabled=confirmar.strip().upper() != "RESTAURAR", key="resp_rest"):
+                with st.spinner("Restaurando..."):
+                    respaldos.restaurar(lista_r[elegido_r], USR)
+                st.session_state.version += 1
+                st.session_state.mensaje = f"TMS restaurado al respaldo del {lista_r[elegido_r]['fecha']} ✅"
+                st.rerun()
     with sub_u:
         st.markdown("**Crear usuario nuevo**")
         st.caption("Perfiles: **ATC** captura pedidos · **OPS** asigna unidad y operador · **TC** registra tiempos y estatus · "

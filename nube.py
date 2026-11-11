@@ -31,11 +31,12 @@ except ImportError:
     _local = None
 
 # Tablas que NO se suben (se rehacen solas en cada computadora: posiciones de Omnitracs, nombres de lugares, etc.)
-SOLO_LOCALES = {"posiciones", "pos_referencia", "lugares", "meta", "nube_pendiente", "sqlite_sequence", "nube_meta"}
+SOLO_LOCALES = {"posiciones", "pos_referencia", "lugares", "meta", "nube_pendiente", "sqlite_sequence", "nube_meta",
+                "respaldos_nube"}     # respaldos_nube vive solo en internet (no se baja a cada computadora)
 ESCRITURA = {"INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP"}
 _candado = threading.RLock()
 _estado = {"version": None, "ultimo_envio": None, "error": "", "ultima_revision": 0.0,
-           "lista": False}          # lista = la nube ya tiene los datos (se subieron con 'py nube.py subir')
+           "lista": False, "revisada": False}          # lista = la nube ya tiene los datos (se subieron con 'py nube.py subir')
 
 
 _cache = {}
@@ -115,6 +116,23 @@ def consultar(sql, params=()):
         raise RuntimeError(res.get("error", {}).get("message", "error"))
     r = res["response"]["result"]
     return [c["name"] for c in r["cols"]], [[_valor(c) for c in fila] for fila in r["rows"]]
+
+
+def ejecutar(sentencias):
+    """Sentencias directas en internet, en una transaccion, SIN avisar a las demas computadoras (no cambia la version).
+    Se usa para los respaldos, que no forman parte de los datos del dia a dia."""
+    pasos = [{"stmt": _stmt("BEGIN")}]
+    for sql, params in sentencias:
+        pasos.append({"stmt": _stmt(sql, params), "condition": {"type": "ok", "step": len(pasos) - 1}})
+    ultimo = len(pasos) - 1
+    pasos.append({"stmt": _stmt("COMMIT"), "condition": {"type": "ok", "step": ultimo}})
+    pasos.append({"stmt": _stmt("ROLLBACK"), "condition": {"type": "not", "cond": {"type": "ok", "step": ultimo}}})
+    res = _pipeline([{"type": "batch", "batch": {"steps": pasos}}], timeout=120)[0]
+    if res["type"] != "ok":
+        raise RuntimeError(res.get("error", {}).get("message", "error"))
+    errores = [e for e in res["response"]["result"].get("step_errors", []) if e]
+    if errores:
+        raise RuntimeError(errores[0].get("message", "error"))
 
 
 def _lote(sentencias):
@@ -280,7 +298,7 @@ def refrescar(ruta_bd, cada_segundos=5):
         return False
     if time.time() - _estado["ultima_revision"] < cada_segundos and _estado["version"] is not None:
         return False
-    _estado["ultima_revision"] = time.time()
+    _estado["ultima_revision"], _estado["revisada"] = time.time(), True
     try:
         if pendientes(ruta_bd):
             enviar([], ruta_bd)                      # primero lo que no se habia podido mandar

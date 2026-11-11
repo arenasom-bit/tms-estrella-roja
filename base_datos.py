@@ -35,6 +35,8 @@ def _situacion_por_defecto(con):
 
 @contextmanager
 def conexion():
+    if nube.activa() and not nube.estado()["revisada"]:
+        nube.refrescar(RUTA_BD)               # primer uso en este programa: ponerse al dia con internet
     con = sqlite3.connect(RUTA_BD, timeout=30, factory=nube.ConexionNube)   # lo que se guarda tambien va a internet
     try:
         yield con
@@ -658,25 +660,6 @@ def aprender_link(lado, nombre, link):
     tabla = "origenes" if lado == "origen" else "destinos"
     with conexion() as con:
         con.execute(f"UPDATE {tabla} SET link = ? WHERE nombre = ? AND (link IS NULL OR link = '')", [link, nombre])
-
-
-# ---------------------------------------------------------- respaldo diario
-def respaldo_diario(carpeta="respaldos", conservar=None):
-    """Copia tms.db a respaldos/tms_AAAAMMDD.db una vez al dia y borra los mas viejos
-    (se conservan los ultimos RESPALDOS_DIAS de configuracion.py; por defecto 150 = 5 meses)."""
-    conservar = conservar or int(getattr(cfg, "RESPALDOS_DIAS", 150))
-    import shutil
-    from pathlib import Path
-    hoy = datetime.now().strftime("%Y%m%d")
-    if leer_meta("ultimo_respaldo") == hoy:
-        return
-    destino = RUTA_BD.parent / carpeta
-    destino.mkdir(exist_ok=True)
-    with conexion() as con, sqlite3.connect(destino / f"tms_{hoy}.db") as copia:
-        con.backup(copia)
-    for viejo in sorted(destino.glob("tms_*.db"))[:-conservar]:
-        viejo.unlink()
-    guardar_meta("ultimo_respaldo", hoy)
 
 
 # ---------------------------------------------------------- usuarios y acceso
