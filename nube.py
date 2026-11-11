@@ -306,6 +306,20 @@ def bajar(ruta_bd):
         return True
 
 
+def _diag(evento, detalle=""):
+    """Anota en internet (tabla nube_diag) que paso al conectar, para poder revisarlo a distancia. Nunca falla."""
+    try:
+        import platform
+        ejecutar([("CREATE TABLE IF NOT EXISTS nube_diag (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, "
+                   "equipo TEXT, evento TEXT, detalle TEXT)", ()),
+                  ("INSERT INTO nube_diag (fecha, equipo, evento, detalle) VALUES (?, ?, ?, ?)",
+                   (time.strftime("%Y-%m-%d %H:%M:%S"), f"{platform.node()} py{platform.python_version()} "
+                    f"sqlite{sqlite3.sqlite_version}", evento, str(detalle)[:3000])),
+                  ("DELETE FROM nube_diag WHERE id NOT IN (SELECT id FROM nube_diag ORDER BY id DESC LIMIT 300)", ())])
+    except Exception:
+        pass
+
+
 def refrescar(ruta_bd, cada_segundos=5):
     """Si alguien cambio la base de internet, baja lo nuevo. Barato: solo pregunta el numero de version."""
     if not activa():
@@ -317,11 +331,20 @@ def refrescar(ruta_bd, cada_segundos=5):
         if pendientes(ruta_bd):
             enviar([], ruta_bd)                      # primero lo que no se habia podido mandar
         v = version_remota()
-        if v != _estado["version"]:
-            return bajar(ruta_bd)
+        if v != _estado["version"] or not _estado["lista"]:
+            ok = bajar(ruta_bd)
+            if not _estado["lista"]:
+                _estado["error"] = f"{time.strftime('%H:%M:%S')} - la base en internet no tiene la tabla de viajes (version {v})"
+                _diag("bajar_sin_viajes", f"version remota {v}")
+            elif not _estado.get("diag_ok"):
+                _estado["diag_ok"] = True
+                _diag("conectado", f"version {v} · ruta {ruta_bd}")
+            return ok
         return False
     except Exception as e:
-        _estado["error"] = f"{time.strftime('%H:%M:%S')} - {e}"
+        import traceback
+        _estado["error"] = f"{time.strftime('%H:%M:%S')} - {type(e).__name__}: {e}"
+        _diag("error", traceback.format_exc())
         return False
 
 

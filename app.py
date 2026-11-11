@@ -343,9 +343,16 @@ def aviso_nube():
     e = nube.estado()
     pend = nube.pendientes(bd.RUTA_BD)
     if not e["lista"]:
-        st.warning("☁️ La base en internet está vacía o no responde. Lo que captures se queda solo en esta computadora. "
-                   "Sube los datos con `py nube.py subir` (ver manual)."
-                   + (f"  \nDetalle: {e['error'][:160]}" if USR.get("perfil") == "MASTER" and e["error"] else ""))
+        if not e["error"]:                       # no se ha podido revisar: intentarlo ya y dejar constancia
+            bd.refrescar_desde_nube()
+            e = nube.estado()
+            if not e["lista"]:
+                nube._diag("aviso_sin_lista", {k: v for k, v in e.items()})
+        if e["lista"]:
+            st.caption("☁️ Base en internet: conectada y al día")
+            return
+        st.warning("☁️ No se pudo conectar con la base en internet. Lo que captures se queda solo en esta computadora."
+                   + (f"  \nDetalle: {e['error'][:200]}" if e["error"] else ""))
     elif pend or e["error"]:
         st.warning(f"☁️ Sin conexión con la base en internet: {pend} cambio(s) esperando para subirse. "
                    "Se mandan solos cuando regrese la conexión."
