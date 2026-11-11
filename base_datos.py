@@ -654,8 +654,10 @@ def aprender_link(lado, nombre, link):
 
 
 # ---------------------------------------------------------- respaldo diario
-def respaldo_diario(carpeta="respaldos", conservar=14):
-    """Copia tms.db a respaldos/tms_AAAAMMDD.db una vez al dia y borra los mas viejos."""
+def respaldo_diario(carpeta="respaldos", conservar=None):
+    """Copia tms.db a respaldos/tms_AAAAMMDD.db una vez al dia y borra los mas viejos
+    (se conservan los ultimos RESPALDOS_DIAS de configuracion.py; por defecto 150 = 5 meses)."""
+    conservar = conservar or int(getattr(cfg, "RESPALDOS_DIAS", 150))
     import shutil
     from pathlib import Path
     hoy = datetime.now().strftime("%Y%m%d")

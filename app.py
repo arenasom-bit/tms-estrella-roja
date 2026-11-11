@@ -27,7 +27,7 @@ st.set_page_config(page_title="TMS · Estrella Roja",
 bd.crear_tablas()
 ec.crear_tabla()
 try:
-    bd.respaldo_diario()          # copia de seguridad de tms.db (1 por dia, guarda 14)
+    bd.respaldo_diario()          # copia de seguridad de tms.db (1 por dia, guarda RESPALDOS_DIAS)
 except Exception:
     pass
 estilo.aplicar()

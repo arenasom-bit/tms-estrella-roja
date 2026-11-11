@@ -43,7 +43,8 @@ SYNC_ZAM_AUTOMATICO = True       # True = se actualiza solo mientras el TMS este
 DIAS_ATRAS_ABIERTOS = 15         # viajes sin terminar se arrastran hasta 15 dias
 
 # ---- Archivos ----
-ARCHIVO_BD = "tms.db"            # aqui se guarda TODA tu informacion
+ARCHIVO_BD = "tms.db"            # aqui se guarda TODA tu informacion (los viajes nunca se borran solos)
+RESPALDOS_DIAS = 150             # copias diarias de tms.db que se guardan en la carpeta respaldos (150 = 5 meses)
 
 # ---- Coincidencias con ZAM (el TMS NO sustituye a ZAM: solo toma datos de el) ----
 # Si un viaje del plan no tiene PEDIDO pero coincide con un viaje de ZAM (misma unidad y
