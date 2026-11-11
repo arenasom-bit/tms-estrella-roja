@@ -138,6 +138,10 @@ if "usuario" not in st.session_state:
         u_in = st.text_input("Usuario")
         p_in = st.text_input("Contraseña", type="password")
         entrar = st.form_submit_button("Entrar", type="primary")
+    if nube.activa():                       # estado de la base en internet (sin datos secretos)
+        _e = nube.estado()
+        st.caption("☁️ Base en internet: conectada" if _e["lista"] else
+                   f"☁️ Base en internet: sin conexión · {(_e['error'] or 'revisando...')[:120]}")
     if entrar:
         datos_u, msg = bd.autenticar(u_in, p_in)
         if datos_u:
