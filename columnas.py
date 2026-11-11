@@ -131,6 +131,7 @@ PESTANAS = {
     "plan": "📋 Plan del día",
     "nuevo": "➕ Nuevo pedido",
     "mon": "📍 Monitoreo",
+    "est": "📣 Estatus clientes",         # el estatus que TC le manda a cada cliente (captura de pantalla)
     "cat": "📚 Catálogos",
     "exp": "📤 Exportar CSV",
     "seg": "🔐 Usuarios y bitácora",      # solo usuarios MASTER
@@ -139,7 +140,7 @@ PESTANAS = {
 PERMISOS = {
     "ATC":   {"pestanas": ["plan", "nuevo", "mon", "cat", "exp"], "agregar_borrar": True,  "editar": True,  "zam": True, "monitoreo_editar": False},
     "OPS":   {"pestanas": ["plan", "mon", "cat", "exp"],          "agregar_borrar": False, "editar": True,  "zam": True, "monitoreo_editar": False},
-    "TC":    {"pestanas": ["plan", "mon", "exp"],                 "agregar_borrar": False, "editar": True,  "zam": False, "monitoreo_editar": True},
+    "TC":    {"pestanas": ["plan", "mon", "est", "exp"],                 "agregar_borrar": False, "editar": True,  "zam": False, "monitoreo_editar": True},
     "TODOS": {"pestanas": ["plan", "exp"],                        "agregar_borrar": False, "editar": False, "zam": False, "monitoreo_editar": False},
 }
 

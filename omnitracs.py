@@ -91,6 +91,10 @@ def leer_respuesta(xml_texto):
                 "velocidad": _numero(_texto_hijo(pos, "speed")) or 0.0,
                 "latitud": _numero(_texto_hijo(pos, "latitude")),
                 "longitud": _numero(_texto_hijo(pos, "longitude")),
+                # si el command manda la ubicacion en texto (colonia, municipio, estado), se usa tal cual
+                "ubicacion": next((_texto_hijo(pos, t) for t in ("location", "address", "description", "reference",
+                                                               "geoReference", "place", "landmark")
+                                   if _texto_hijo(pos, t)), ""),
             }
             if alias not in ultimas or fecha > ultimas[alias]["_dt"]:
                 ultimas[alias] = registro

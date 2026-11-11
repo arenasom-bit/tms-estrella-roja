@@ -13,7 +13,9 @@ import calculos
 import catalogos_excel
 import conciliacion
 import configuracion as cfg
+import estatus_clientes as ec
 import estilo
+import importar_plan
 import omnitracs
 import reglas
 import zam
@@ -23,6 +25,7 @@ from columnas import (CATALOGO_DE, CATALOGOS, COLUMNAS, CONTEXTO, ESTATUS_CERRAD
 st.set_page_config(page_title="TMS · Estrella Roja",
                    page_icon=str(estilo.ISOTIPO) if estilo.ISOTIPO.exists() else "🚛", layout="wide")
 bd.crear_tablas()
+ec.crear_tabla()
 try:
     bd.respaldo_diario()          # copia de seguridad de tms.db (1 por dia, guarda 14)
 except Exception:
@@ -38,6 +41,16 @@ def _hilo_zam():
 
 if getattr(cfg, "SYNC_ZAM_AUTOMATICO", True):
     _hilo_zam()
+
+
+@st.cache_resource(show_spinner=False)
+def _hilo_ubicaciones():
+    """Un solo hilo por servidor que le pone nombre (colonia, municipio, estado) a las posiciones de Omnitracs."""
+    return ec.iniciar_geocodificacion()
+
+
+if getattr(cfg, "UBICACION_EN_TEXTO", True):
+    _hilo_ubicaciones()
 
 if "version" not in st.session_state:
     st.session_state.version = 0
@@ -108,6 +121,7 @@ def mostrar_ficha(id_txt):
 
 # ------------------------------------------------------------------ acceso con usuario y contraseña
 ficha_id = st.query_params.get("ficha")        # si viene en la liga, se abre la FICHA del pedido y nada mas
+estatus_id = st.query_params.get("estatus")    # ... o el ESTATUS de un cliente, limpio para tomarle captura
 st.sidebar.markdown("### Plan de carga TMS")
 
 if "usuario" not in st.session_state:
@@ -140,6 +154,18 @@ if st.sidebar.button("Cerrar sesión"):
 
 if ficha_id:
     mostrar_ficha(ficha_id)
+    st.stop()
+
+if estatus_id:
+    if estatus_id not in ec.PLANTILLAS:
+        st.error("Liga de estatus no válida.")
+    else:
+        st.markdown(estilo.FICHA_CSS.replace("max-width: 980px", "max-width: 1500px"), unsafe_allow_html=True)
+        _f = ec.Fuentes()
+        _tablas = {s_.clave: ec.armar(estatus_id, s_.clave, _f)[0] for s_ in ec.PLANTILLAS[estatus_id]["secciones"]}
+        st.markdown(ec.html_captura(estatus_id, _tablas), unsafe_allow_html=True)
+        st.markdown('<p class="er-ficha-tip">📸 Toma la captura de esta pantalla (en Windows: <b>Win + Shift + S</b>). '
+                    '&nbsp;·&nbsp; <a href="?" target="_self">← Volver al TMS</a></p>', unsafe_allow_html=True)
     st.stop()
 
 perm = PERMISOS[rol]
@@ -1118,6 +1144,118 @@ if "mon" in T:
     panel_monitoreo(dia, tipo_sel, perm["monitoreo_editar"])
 
 
+# ================================================================== ESTATUS PARA CLIENTES (TC)
+def _guardar_estatus(plantilla, secciones_df, quien):
+    """Compara lo que quedo en las tablas contra lo que se mostro y guarda SOLO lo que se escribio a mano."""
+    cambios, borrar, n_campos = {}, [], 0
+    for sec_clave, (mostrado, editado, autos, cols) in secciones_df.items():
+        mostrado = mostrado.set_index("id")
+        for _, r in editado.iterrows():
+            id_ = int(r["id"])
+            if "quitar" in r and bool(r["quitar"]):
+                borrar.append(id_)
+                continue
+            auto, datos = autos[id_]
+            d = dict(datos)
+            for c in cols:
+                if c.modo == "auto":
+                    continue
+                nuevo, antes = ec._t(r.get(c.clave)), ec._t(mostrado.loc[id_, c.clave])
+                if nuevo == antes:
+                    continue
+                n_campos += 1
+                if nuevo == "" or nuevo == ec._t(auto.get(c.clave)):
+                    d.pop(c.clave, None)                  # vacio = vuelve a lo automatico
+                else:
+                    d[c.clave] = nuevo[:ec.MAX_ESTATUS] if c.clave == "status" else nuevo
+                if c.clave == "status":                   # el estatus a mano vale para el viaje con que se escribio
+                    d["_status_folio"] = ec._t(r.get("folio")) if "folio" in r else ""
+            if d != datos:
+                cambios[id_] = d
+    ec.guardar_datos(cambios, quien.get("usuario", "") if isinstance(quien, dict) else str(quien))
+    ec.borrar_filas(borrar)
+    if cambios or borrar:
+        bd.bitacora(quien, "ESTATUS_CLIENTE_GUARDADO", plantilla,
+                    f"{len(cambios)} renglón(es) con cambios · {n_campos} dato(s) · {len(borrar)} renglón(es) quitado(s)")
+    return len(cambios), len(borrar)
+
+
+if "est" in T:
+  with T["est"]:
+    st.subheader("Estatus para clientes")
+    st.caption("Escoge el cliente, captura **ECO, VIAJE, STATUS y COMENTARIO** y guarda. "
+               "**HR. ACTUALIZADO** y **UBICACIÓN** salen solos del command (Omnitracs) de la unidad. "
+               "Si el VIAJE es un pedido, folio de cliente o # viaje del plan de carga, ORIGEN, DESTINO y CITAS se llenan solos "
+               "(si escribes encima, manda lo tuyo; si lo borras, vuelve lo automático). "
+               "Abajo está la vista limpia para tomarle captura y mandarla al cliente.")
+    nombres = list(ec.PLANTILLAS)
+    plantilla = st.selectbox("Cliente", nombres, key="est_cliente",
+                             index=nombres.index("PEPSICO DEDICADO") if "PEPSICO DEDICADO" in nombres else 0)
+    conf_p = ec.PLANTILLAS[plantilla]
+    ver_e = st.session_state.get("est_ver", 0)
+    fuentes = ec.Fuentes()
+    secciones_df, tablas = {}, {}
+    for sec in conf_p["secciones"]:
+        mostrado, autos = ec.armar(plantilla, sec.clave, fuentes)
+        tablas[sec.clave] = mostrado
+        if sec.rotulo:
+            st.markdown(f"**{sec.rotulo}**")
+        if conf_p.get("pepsico") == "dedicado":
+            res = ec.resumen_estatus(mostrado)
+            if not res.empty:
+                st.caption("Estatus de las unidades → " + " · ".join(f"{r.ESTATUS}: {r.UNIDADES} ({r._3:.0f}%)"
+                                                                     for r in res.itertuples()))
+        vista = mostrado.copy()
+        cc = {"id": None}
+        if not conf_p.get("fijas"):
+            vista.insert(1, "quitar", False)
+            cc["quitar"] = st.column_config.CheckboxColumn("🗑️", width="small", help="Marca y guarda para quitar el renglón.")
+        for c in sec.columnas:
+            candado = " 🔒" if c.modo == "auto" else (" ⚙️" if c.modo == "semi" else "")
+            ayuda = {"auto": "Sale solo del TMS (Omnitracs / plan de carga).",
+                     "semi": "Sale solo del plan de carga; puedes escribir encima. Si lo borras, vuelve lo automático.",
+                     "manual": "Se captura a mano."}[c.modo]
+            if c.clave == "status" and conf_p.get("pepsico"):
+                cc[c.clave] = st.column_config.TextColumn(c.titulo.strip() + candado, max_chars=ec.MAX_ESTATUS,
+                                                          help=f"Texto libre (máximo {ec.MAX_ESTATUS} caracteres). " + ayuda)
+            else:
+                cc[c.clave] = st.column_config.TextColumn(c.titulo.strip() + candado, help=ayuda,
+                                                          width="large" if c.clave in ("ubicacion", "comentario") else None)
+        ecos = vista["eco"].map(ec._k)
+        rep = sorted({e for e in ecos[ecos != ""] if (ecos == e).sum() > 1})
+        if rep:
+            st.warning(f"Unidad repetida en esta tabla: {', '.join(rep)}. Revisa que no sea un duplicado.")
+        if vista.empty:
+            st.caption("Sin renglones todavía: usa ➕ Agregar fila.")
+            editado = vista
+        else:
+            editado = st.data_editor(
+              vista, key=f"est_{plantilla}_{sec.clave}_{ver_e}", hide_index=True, column_config=cc,
+              column_order=([] if conf_p.get("fijas") else ["quitar"]) + [c.clave for c in sec.columnas],
+              disabled=[c.clave for c in sec.columnas if c.modo == "auto"], num_rows="fixed",
+              height=min(38 + 35 * max(len(vista), 1), 900))
+        secciones_df[sec.clave] = (mostrado, editado, autos, sec.columnas)
+        if not conf_p.get("fijas"):
+            if st.button("➕ Agregar fila", key=f"est_mas_{plantilla}_{sec.clave}"):
+                ec.agregar_fila(plantilla, sec.clave, quien=USR["usuario"])
+                st.session_state.est_ver = ver_e + 1
+                st.rerun()
+
+    g1, g2, _ = st.columns([1.3, 2, 4])
+    if g1.button("💾 Guardar estatus", type="primary", key="est_guardar"):
+        n, b = _guardar_estatus(plantilla, secciones_df, USR)
+        st.session_state.est_ver = ver_e + 1
+        st.session_state.mensaje = f"Estatus de {plantilla} guardado ✅  ({n} renglón(es) con cambios" + \
+                                   (f", {b} quitado(s))" if b else ")")
+        st.rerun()
+    g2.link_button("📸 Abrir pantalla para captura", f"{base_url()}/?estatus={plantilla.replace('+', '%2B').replace(' ', '%20')}")
+    st.caption("Lo que no guardes no aparece en la captura. Las columnas con 🔒 se calculan solas y las de ⚙️ salen del "
+               "plan de carga pero puedes corregirlas.")
+    st.markdown("**Vista para captura**")
+    with st.container(border=True):
+        st.markdown(ec.html_captura(plantilla, tablas), unsafe_allow_html=True)
+
+
 # ================================================================== CATÁLOGOS
 @st.cache_data(ttl=300, show_spinner=False)
 def _excel_catalogos(con_datos, version):
@@ -1150,6 +1288,30 @@ if "cat" in T:
                 st.rerun()
             except Exception as e:
                 st.error(f"No se pudo cargar: {e}")
+
+    with st.expander("🔄 Poner al día el plan de carga desde el Excel de planes (todas las pestañas)"):
+        st.write("Sube el libro de planes (PEPSICO DEDICADO, PEPSICO CELAYA, SPOT, PEPSICO, KN, COPPEL, LA COMER, DHL, RYC). "
+                 "Cada renglón se empata con su viaje del TMS por **pedido, CP / folio ZAM, # viaje** o **unidad + cita**: "
+                 "si ya existe se actualiza, si no se agrega. Antes junta los viajes que estén repetidos en el TMS. "
+                 "Puedes subirlo las veces que quieras: no duplica.")
+        libro = st.file_uploader("Libro de planes (.xlsx)", type=["xlsx"], key="libro_planes")
+        if libro is not None:
+            p1, p2, _ = st.columns([1.3, 1.6, 4])
+            if p1.button("👀 Revisar sin guardar", key="plan_probar"):
+                libro.seek(0)
+                r = importar_plan.sincronizar(libro, aplicar=False)
+                st.info(f"Si lo aplicas: {r['duplicados']} copias repetidas se juntan · {r['nuevos']} viajes nuevos · "
+                        f"{r['actualizados']} se actualizan · {r['sin_cambio']} ya están al día · "
+                        f"{r['finalizados']} quedan ✅ · {r['cancelados']} quedan ❌")
+                st.dataframe(pd.DataFrame(r["detalle"], columns=["PESTAÑA", "RENGLÓN", "QUÉ PASA", "DETALLE"]),
+                             hide_index=True, height=300)
+            if p2.button("✅ Poner al día el plan", type="primary", key="plan_aplicar"):
+                libro.seek(0)
+                r = importar_plan.sincronizar(libro, aplicar=True, quien=USR)
+                st.session_state.version += 1
+                st.session_state.mensaje = (f"Plan al día ✅  {r['nuevos']} nuevos · {r['actualizados']} actualizados · "
+                                            f"{r['sin_cambio']} sin cambio · {r['duplicados']} copias repetidas juntadas")
+                st.rerun()
 
     def editor_catalogo(tabla, config=None):
         df_c = bd.leer_catalogo(tabla)

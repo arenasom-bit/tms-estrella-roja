@@ -75,6 +75,8 @@ def crear_tablas():
             "CREATE TABLE IF NOT EXISTS posiciones (alias TEXT PRIMARY KEY, fecha TEXT, "
             "ignicion TEXT, velocidad REAL, latitud REAL, longitud REAL, actualizado TEXT)"
         )
+        if "ubicacion" not in {f[1] for f in con.execute("PRAGMA table_info(posiciones)")}:
+            con.execute("ALTER TABLE posiciones ADD COLUMN ubicacion TEXT")     # texto que manda el command (si lo manda)
         con.execute("CREATE TABLE IF NOT EXISTS meta (clave TEXT PRIMARY KEY, valor TEXT)")
         # viajes abiertos que reporta la vista ZAM (se reemplaza completa en cada actualizacion)
         con.execute(
@@ -388,8 +390,10 @@ def guardar_posiciones(lista):
                     con.execute("INSERT OR REPLACE INTO pos_referencia VALUES (?, ?, ?, ?)",
                                 [p["alias"], la, lo, p["fecha"] or ahora])
             con.execute(
-                "INSERT OR REPLACE INTO posiciones VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [p["alias"], p["fecha"], p["ignicion"], p["velocidad"], p["latitud"], p["longitud"], ahora],
+                "INSERT OR REPLACE INTO posiciones (alias, fecha, ignicion, velocidad, latitud, longitud, actualizado, ubicacion) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [p["alias"], p["fecha"], p["ignicion"], p["velocidad"], p["latitud"], p["longitud"], ahora,
+                 p.get("ubicacion") or None],
             )
     guardar_meta("ultima_consulta", ahora)
 

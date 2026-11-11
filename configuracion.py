@@ -79,3 +79,7 @@ MON_SIN_REPORTAR_MIN = 60           # 🟠 la unidad lleva mas de esto sin manda
 MON_DETENIDA_TRANSITO_MIN = 60      # 🟠 unidad CARGADA en transito, detenida mas de este tiempo
 MON_METROS_PARA_CONSIDERAR_MOVIDA = 300   # cuanto debe moverse para dejar de contarla como "detenida desde"
 MON_ESTATUS_MANUAL_HORAS = 12      # cuanto dura un ESTATUS 1/2 puesto a mano por TC (despues vuelve al automatico)
+
+# ---- Estatus para clientes (pestaña de TC) ----
+UBICACION_EN_TEXTO = True          # pone nombre (colonia, municipio, estado) a la ubicacion del command (usa OpenStreetMap)
+ESTATUS_PEPSICO_HORAS_EXTRA = 2     # PEPSICO DEDICADO: horas que se le suman a la cita de carga y de descarga del plan
