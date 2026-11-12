@@ -158,14 +158,17 @@ def _cliente_catalogo(nombre, clientes):
 
 
 # ---------------------------------------------------------- leer el libro
-def leer_libro(archivo):
-    """Devuelve una lista de viajes (dicts con columnas del TMS + '_hoja', '_fila')."""
+def leer_libro(archivo, hojas=None):
+    """Devuelve una lista de viajes (dicts con columnas del TMS + '_hoja', '_fila').
+    hojas: solo esas pestañas (por nombre); None = todas las que reconoce."""
     wb = load_workbook(archivo, read_only=True, data_only=True)
     clientes = bd.opciones_catalogo("clientes")
     viajes = []
     for ws in wb.worksheets:
         nombre = _enc(ws.title)
         if nombre in HOJAS_REPETIDAS or nombre not in HOJAS:
+            continue
+        if hojas is not None and nombre not in {_enc(h) for h in hojas}:
             continue
         conf = HOJAS[nombre]
         filas = ws.iter_rows(values_only=True)
@@ -348,11 +351,11 @@ def depurar_duplicados(aplicar=True, quien="SISTEMA"):
     return hechos
 
 
-def sincronizar(archivo, aplicar=True, quien="SISTEMA"):
+def sincronizar(archivo, aplicar=True, quien="SISTEMA", hojas=None):
     """Compara el Excel con el TMS. aplicar=False solo dice que haria. Devuelve un resumen (dict)."""
     bd.crear_tablas()
     dup = depurar_duplicados(aplicar=aplicar, quien=quien)
-    excel = leer_libro(archivo)
+    excel = leer_libro(archivo, hojas)
     tms = bd.leer_viajes("0000-01-01", "9999-12-31")
     if not aplicar and dup:                       # en prueba: hacer como si ya se hubieran juntado
         tms = tms[~tms["id"].isin({i for _, c in dup for i in c})]
