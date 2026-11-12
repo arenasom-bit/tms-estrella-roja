@@ -11,14 +11,30 @@ import base_datos as bd
 import nube
 import respaldos
 
+def falla(motivo):
+    """El motivo sale en GitHub (Actions > Annotations) sin tener que abrir los registros."""
+    print(f"::error::{motivo}")
+    sys.exit(1)
+
+
 if __name__ == "__main__":
-    if not nube.activa():
-        print("Faltan TURSO_URL y TURSO_TOKEN.")
-        sys.exit(1)
+    url, token = nube.url(), nube._dato("TURSO_TOKEN")
+    if not url:
+        falla("El secreto TURSO_URL esta vacio o no existe (revisa el nombre en Settings > Secrets > Actions).")
+    if not token:
+        falla("El secreto TURSO_TOKEN esta vacio o no existe (revisa el nombre en Settings > Secrets > Actions).")
+    if "turso.io" not in url:
+        falla("TURSO_URL no parece la direccion de la base (debe ser libsql://...turso.io). "
+              "¿Quedo el token en TURSO_URL?")
+    if token.count(".") != 2 or len(token) < 100:
+        falla(f"TURSO_TOKEN no parece un token (largo {len(token)}). ¿Quedo la direccion en TURSO_TOKEN?")
+    try:
+        nube.version_remota()
+    except Exception as e:
+        falla(f"No se pudo conectar con la base de internet: {e}")
     bd.crear_tablas()                      # baja todo lo de internet a este tms.db temporal
     if not nube.estado()["lista"]:
-        print("No se pudo bajar la base de internet:", nube.estado()["error"])
-        sys.exit(1)
+        falla(f"No se pudo bajar la base de internet: {nube.estado()['error']}")
     if respaldos._ya_hay_hoy():
         print("Hoy ya hay respaldo automatico. Nada que hacer.")
     else:
