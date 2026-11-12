@@ -25,6 +25,7 @@ import zam
 from columnas import (CATALOGO_DE, CATALOGOS, COLUMNAS, CONTEXTO, ESTATUS_CERRADOS, FICHA_REQUERIDOS, LISTAS,
                       PENDIENTES, PERMISOS, PESTANAS, ROLES, SITUACIONES, TIPO_POR_CLAVE, TITULO_POR_CLAVE)
 
+VERSION_TMS = "12/11 v2"            # se ve en la pantalla de entrada: sirve para saber que version esta publicada
 st.set_page_config(page_title="TMS · Estrella Roja",
                    page_icon=str(estilo.ISOTIPO) if estilo.ISOTIPO.exists() else "🚛", layout="wide")
 bd.crear_tablas()
@@ -158,8 +159,10 @@ if "usuario" not in st.session_state:
         entrar = st.form_submit_button("Entrar", type="primary")
     if nube.activa():                       # estado de la base en internet (sin datos secretos)
         _e = nube.estado()
-        st.caption("☁️ Base en internet: conectada" if _e["lista"] else
-                   f"☁️ Base en internet: sin conexión · {(_e['error'] or 'revisando...')[:120]}")
+        _p = nube.pendientes(bd.RUTA_BD)
+        st.caption(("☁️ Base en internet: conectada" if _e["lista"] else "☁️ Base en internet: sin conexión")
+                   + (f" · {_p} cambio(s) esperando" if _p else "")
+                   + (f" · {_e['error'][:140]}" if _e["error"] else "") + f" · versión {VERSION_TMS}")
     if entrar:
         datos_u, msg = bd.autenticar(u_in, p_in)
         if datos_u:

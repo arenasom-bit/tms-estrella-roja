@@ -273,6 +273,10 @@ def enviar(sentencias, ruta_bd):
                 for s, p in sentencias:
                     con.execute("INSERT INTO nube_pendiente (sentencia) VALUES (?)", [json.dumps([s, list(p or ())])])
                 _estado["error"] = f"{time.strftime('%H:%M:%S')} - {e}"
+                if time.time() - _estado.get("diag_envio", 0) > 120:      # avisar a distancia (maximo cada 2 min)
+                    _estado["diag_envio"] = time.time()
+                    _diag("envio_fallido", f"{len(todo)} pendientes · {type(e).__name__}: {e} · primeros: "
+                          + " | ".join(s[:90] for s, _ in todo[:4]))
 
 
 def pendientes(ruta_bd):
