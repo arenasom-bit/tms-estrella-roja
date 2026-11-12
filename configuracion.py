@@ -7,6 +7,15 @@
 #    2) el archivo configuracion_local.py (NO lo compartas ni lo subas a ningun lado)
 # ==========================================================
 import os
+import time as _time
+
+# ---- Hora del TMS: centro de Mexico (GDL / CDMX, UTC-6, sin horario de verano) ----
+# La pagina de la nube corre en un servidor con hora de Londres; con esto todo el TMS
+# (bitacora, "modificado", horas de actualizacion) usa la hora de Mexico. En Windows ya es la local.
+ZONA_HORARIA = "CST6"
+if hasattr(_time, "tzset"):
+    os.environ["TZ"] = ZONA_HORARIA
+    _time.tzset()
 
 try:
     import configuracion_local as _local
