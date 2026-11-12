@@ -52,7 +52,7 @@ import zam
 from columnas import (CATALOGO_DE, CATALOGOS, COLUMNAS, CONTEXTO, ESTATUS_CERRADOS, FICHA_REQUERIDOS, LISTAS,
                       PENDIENTES, PERMISOS, PESTANAS, ROLES, SITUACIONES, TIPO_POR_CLAVE, TITULO_POR_CLAVE)
 
-VERSION_TMS = "12/11 v3"            # se ve en la pantalla de entrada: sirve para saber que version esta publicada
+VERSION_TMS = "12/11 v4"            # se ve en la pantalla de entrada: sirve para saber que version esta publicada
 st.set_page_config(page_title="TMS · Estrella Roja",
                    page_icon=str(estilo.ISOTIPO) if estilo.ISOTIPO.exists() else "🚛", layout="wide")
 bd.crear_tablas()
@@ -437,10 +437,18 @@ if st.session_state.get("mensaje"):
 # ------------------------------------------------------------------ pestañas (cada perfil ve solo las suyas)
 claves_tabs = perm["pestanas"] + (["seg"] if es_master else [])
 try:                                     # key: la pagina recuerda en que pestaña estabas (tras guardar, avisos, etc.)
-    _pestanas = st.tabs([PESTANAS[k] for k in claves_tabs], key=f"pestanas_{rol}")
+    _pestanas = st.tabs([PESTANAS[k] for k in claves_tabs], key=f"pestanas_{rol}", on_change="rerun")
 except TypeError:                        # Streamlit viejo (sin key en tabs)
     _pestanas = st.tabs([PESTANAS[k] for k in claves_tabs])
 T = dict(zip(claves_tabs, _pestanas))
+_tab_actual = st.session_state.get(f"pestanas_{rol}") or PESTANAS[claves_tabs[0]]
+_tab_anterior = st.session_state.get("tab_anterior")
+if _tab_anterior and _tab_anterior != _tab_actual:            # cambio de pestaña: ¿dejo algo sin guardar?
+    if _tab_anterior == PESTANAS.get("plan") and st.session_state.get("plan_pend"):
+        st.session_state.preguntar = "plan"
+    elif _tab_anterior == PESTANAS.get("est") and st.session_state.get("est_pend"):
+        st.session_state.preguntar = "est"
+st.session_state.tab_anterior = _tab_actual
 
 
 def pendiente(df, rol):
@@ -476,6 +484,16 @@ def confirmar_borrado():
         st.rerun()
     if c2.button("No, conservar", use_container_width=True):
         st.rerun()
+
+
+_DIALOGO = {"abierto": False}            # Streamlit solo permite UNA ventana a la vez
+
+
+def abrir_dialogo():
+    if _DIALOGO["abierto"]:
+        return False
+    _DIALOGO["abierto"] = True
+    return True
 
 
 # ================================================================== CAMBIOS SIN GUARDAR
@@ -516,6 +534,7 @@ def preguntar_guardar_plan():
     if c1.button("💾 Guardar", type="primary", use_container_width=True, key="dlg_plan_si"):
         ok, res = guardar_plan_pendiente(p, USR)
         if ok:
+            st.session_state.pop("preguntar", None)
             st.session_state.mensaje = f"Cambios del {p['dia']:%d/%m/%Y} guardados ✅"
             st.rerun()
         st.error("No se pudieron guardar:\n\n" + "\n".join(f"- {e}" for e in res)
@@ -524,6 +543,8 @@ def preguntar_guardar_plan():
         bd.bitacora(USR, "PLAN_CAMBIOS_DESCARTADOS", f"plan del {p['dia']}", f"{p['n']} viaje(s) con cambios sin guardar")
         st.session_state.pop("plan_pend", None)
         st.session_state.pop("plan_base", None)
+        st.session_state.pop("preguntar", None)
+        st.session_state.version += 1
         st.rerun()
 
 
@@ -536,10 +557,12 @@ def preguntar_guardar_estatus():
         _guardar_estatus(p["plantilla"], p["secciones"], USR)
         st.session_state.pop("est_pend", None)
         st.session_state.est_ver = st.session_state.get("est_ver", 0) + 1
+        st.session_state.pop("preguntar", None)
         st.session_state.mensaje = f"Estatus de {p['plantilla']} guardado ✅"
         st.rerun()
     if c2.button("Descartar", use_container_width=True, key="dlg_est_no"):
         st.session_state.pop("est_pend", None)
+        st.session_state.pop("preguntar", None)
         st.session_state.est_ver = st.session_state.get("est_ver", 0) + 1
         st.rerun()
 
@@ -672,7 +695,6 @@ if "plan" in T:
     # ------------------------------------------------------------ tabla del plan
     claves_ed = claves_editables(rol)
     visibles = ["fecha_plan"] + claves_visibles(rol)
-    visibles.insert(visibles.index("cancelado") + 1, "ficha")
     deshabilitadas = ["fecha_plan", "ficha"] + [c.clave for c in COLUMNAS if c.clave not in claves_ed]
 
     if perm["editar"]:
@@ -693,6 +715,21 @@ if "plan" in T:
             st.caption(f"{len(df_tab)} de {len(df)} viajes tienen pendiente algo de tu perfil.")
     df_tab = agregar_ficha(df_tab.reset_index(drop=True))
 
+    # ------------------------------ ficha del pedido: se abre ENCIMA del plan (sin abrir otra pestaña)
+    listas_ficha = df_tab[df_tab["ficha"].notna()]
+    if not listas_ficha.empty:
+        etiquetas = {int(r["id"]): f"{r['pedido']} · ECO {r['eco']} · {r['operador']} · {r['origen']} → {r['destino']}"
+                     for _, r in listas_ficha.iterrows()}
+        fc1, fc2 = st.columns([5, 1.3], vertical_alignment="bottom")
+        elegido = fc1.selectbox(f"📸 Ficha del pedido para captura ({len(listas_ficha)} listas)", list(etiquetas),
+                                format_func=etiquetas.get, key="ficha_sel",
+                                help="Una ficha se habilita cuando el viaje ya guardado tiene: "
+                                     + ", ".join(TITULO_POR_CLAVE[k] for k in FICHA_REQUERIDOS) + ".")
+        if fc2.button("📸 Ver ficha", type="primary", key="ficha_ventana", use_container_width=True,
+                      help="Se abre encima del plan, lista para la captura. Ciérrala con la ✕."):
+            if abrir_dialogo():
+                ventana_ficha(elegido)
+
     # ------------------------------ solo consulta (perfil TODOS)
     if not perm["editar"]:
         st.dataframe(df_tab, column_order=visibles, column_config=config_columnas(visibles, df_tab),
@@ -712,7 +749,7 @@ if "plan" in T:
 
         ctx_key = f"{dia}|{rol}|{tipo_sel}|{abiertos}|{st.session_state.get('filtro_pendientes')}|{st.session_state.version}"
         pend_previo = st.session_state.get("plan_pend")
-        if pend_previo and pend_previo["ctx"] != ctx_key:      # cambio de dia/tipo/filtro con cambios sin guardar
+        if pend_previo and pend_previo["ctx"] != ctx_key and abrir_dialogo():   # cambio de dia/tipo/filtro sin guardar
             preguntar_guardar_plan()
         guardado = st.session_state.get("plan_base")
         base = guardado[1] if guardado and guardado[0] == ctx_key else df_tab       # con cambios sin guardar, o fresco
@@ -824,23 +861,6 @@ if "plan" in T:
                     + (f" · 🏁 {n_auto} viaje(s) completo(s) finalizado(s) solos: su unidad y operador ya están disponibles"
                        if n_auto else ""))
                 st.rerun()
-
-    # ------------------------------ fichas de pedido (alternativa a la liga de la columna)
-    listas_ficha = df_tab[df_tab["ficha"].notna()]
-    with st.expander(f"📸 Fichas de pedido para captura ({len(listas_ficha)} listas)"):
-        st.caption("Una ficha se habilita cuando el viaje ya guardado tiene: "
-                   + ", ".join(TITULO_POR_CLAVE[k] for k in FICHA_REQUERIDOS) + ".")
-        if listas_ficha.empty:
-            st.info("Ningún viaje de esta vista tiene todos los datos todavía.")
-        else:
-            etiquetas = {int(r["id"]): f"{r['pedido']} · ECO {r['eco']} · {r['operador']} · {r['origen']} → {r['destino']}"
-                         for _, r in listas_ficha.iterrows()}
-            elegido = st.selectbox("Pedido", list(etiquetas), format_func=etiquetas.get, key="ficha_sel")
-            f1, f2, _ = st.columns([1.4, 2, 3])
-            if f1.button("📸 Ver ficha", type="primary", key="ficha_ventana",
-                         help="Se abre encima del plan, lista para la captura. Ciérrala con la ✕."):
-                ventana_ficha(elegido)
-            f2.link_button("Abrir en otra pestaña", listas_ficha.loc[listas_ficha["id"] == elegido, "ficha"].iloc[0])
 
 # ================================================================== NUEVO PEDIDO (solo ATC)
 def _link_automatico(lado, clave_lugar, clave_link):
@@ -1411,7 +1431,7 @@ if "est" in T:
                              index=nombres.index("PEPSICO DEDICADO") if "PEPSICO DEDICADO" in nombres else 0)
     conf_p = ec.PLANTILLAS[plantilla]
     est_previo = st.session_state.get("est_pend")
-    if est_previo and est_previo["plantilla"] != plantilla:    # cambio de cliente con cambios sin guardar
+    if est_previo and est_previo["plantilla"] != plantilla and abrir_dialogo():   # cambio de cliente sin guardar
         preguntar_guardar_estatus()
     ver_e = st.session_state.get("est_ver", 0)
     fuentes = ec.Fuentes()
@@ -1480,8 +1500,8 @@ if "est" in T:
                                    (f", {b} quitado(s))" if b else ")")
         st.rerun()
     if g2.button("📸 Ver para captura", key="est_ventana", help="Se abre encima, lista para la captura. Ciérrala con la ✕."):
-        ventana_estatus(plantilla, tablas)
-    g3.link_button("Abrir en otra pestaña", f"{base_url()}/?estatus={plantilla.replace('+', '%2B').replace(' ', '%20')}")
+        if abrir_dialogo():
+            ventana_estatus(plantilla, tablas)
     st.caption("Lo que no guardes no aparece en la captura. Las columnas con 🔒 se calculan solas y las de ⚙️ salen del "
                "plan de carga pero puedes corregirlas.")
     st.markdown("**Vista para captura**")
@@ -1804,6 +1824,14 @@ if "seg" in T and es_master:        # doble candado: la pestaña solo existe par
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("Elige la fecha final del rango.")
+
+_preg = st.session_state.get("preguntar")
+if _preg == "plan" and st.session_state.get("plan_pend") and abrir_dialogo():
+    preguntar_guardar_plan()
+elif _preg == "est" and st.session_state.get("est_pend") and abrir_dialogo():
+    preguntar_guardar_estatus()
+elif _preg and not _DIALOGO["abierto"]:
+    st.session_state.pop("preguntar", None)
 
 if perm["editar"]:
     with st.sidebar:
