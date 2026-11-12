@@ -211,6 +211,36 @@ def _pendientes_locales(con):
     return con
 
 
+def _sin_repetidos(todo):
+    """Quita los cambios de estructura que la base de internet YA tiene (columna o tabla repetida),
+    para que no atoren al resto. Devuelve (lista_limpia, cuantos_quito)."""
+    limpias, quitadas, columnas = [], 0, {}
+    try:
+        _, objetos = consultar("SELECT name FROM sqlite_master WHERE type IN ('table', 'index')")
+        existentes = {n[0].lower() for n in objetos}
+    except Exception:
+        return todo, 0
+    for s, p in todo:
+        m = re.match(r"\s*ALTER\s+TABLE\s+\"?(\w+)\"?\s+ADD\s+(?:COLUMN\s+)?\"?(\w+)", s, re.I)
+        if m:
+            t = m.group(1).lower()
+            if t not in columnas:
+                try:
+                    columnas[t] = {c[1].lower() for c in consultar(f'PRAGMA table_info("{t}")')[1]}
+                except Exception:
+                    columnas[t] = set()
+            if m.group(2).lower() in columnas[t]:
+                quitadas += 1
+                continue
+            columnas[t].add(m.group(2).lower())
+        m = re.match(r"\s*CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+(?!IF\s)\"?(\w+)", s, re.I)
+        if m and m.group(1).lower() in existentes:
+            quitadas += 1
+            continue
+        limpias.append((s, p))
+    return limpias, quitadas
+
+
 def enviar(sentencias, ruta_bd):
     """Manda a internet lo que se acaba de guardar. Si no hay internet, lo deja en fila y lo reintenta despues."""
     import json
@@ -222,7 +252,16 @@ def enviar(sentencias, ruta_bd):
             if not todo:
                 return
             try:
-                v = _lote([(s, p) for s, p in todo])
+                try:
+                    v = _lote([(s, p) for s, p in todo])
+                except RuntimeError as e:          # una columna/tabla que ya existe en internet no debe atorar lo demas
+                    if not any(x in str(e).lower() for x in ("duplicate column", "already exists")):
+                        raise
+                    limpias, quitadas = _sin_repetidos(todo)
+                    if not quitadas:
+                        raise
+                    v = _lote(limpias) if limpias else _estado["version"]
+                    _diag("repetidos_quitados", f"{quitadas} cambio(s) de estructura que ya existian · {e}")
                 if atrasadas:
                     con.execute("DELETE FROM nube_pendiente WHERE id <= ?", [atrasadas[-1][0]])
                 if v is not None:

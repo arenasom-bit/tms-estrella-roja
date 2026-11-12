@@ -55,6 +55,11 @@ def refrescar_desde_nube():
 
 
 def crear_tablas():
+    with nube._candado:                   # una sola sesion a la vez prepara la base (evita choques al arrancar)
+        _crear_tablas()
+
+
+def _crear_tablas():
     refrescar_desde_nube()
     guardables = [c for c in COLUMNAS if c.tipo != "calculado"]
     with conexion() as con:
