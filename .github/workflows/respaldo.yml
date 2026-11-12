@@ -1,0 +1,21 @@
+name: Respaldo de madrugada
+
+on:
+  schedule:
+    - cron: "15 9 * * *"     # 09:15 UTC = 3:15 a.m. hora del centro de Mexico
+  workflow_dispatch: {}      # tambien se puede correr a mano desde la pestaña Actions de GitHub
+
+jobs:
+  respaldo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests openpyxl
+      - run: python respaldo_programado.py
+        env:
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
