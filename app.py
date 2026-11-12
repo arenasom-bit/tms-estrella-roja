@@ -99,8 +99,9 @@ def fmt_cita(v):
     return None if _vacio(v) else pd.to_datetime(v).strftime("%d/%m/%Y %H:%M")
 
 
-def mostrar_ficha(id_txt):
-    """Pantalla tipo 'ficha de pedido' (como el formato en Excel) lista para tomarle captura."""
+def mostrar_ficha(id_txt, pagina=True):
+    """Pantalla tipo 'ficha de pedido' (como el formato en Excel) lista para tomarle captura.
+    pagina=False: se muestra dentro de una ventana encima del TMS (con su X para cerrar)."""
     try:
         id_ = int(id_txt)
     except (TypeError, ValueError):
@@ -123,9 +124,26 @@ def mostrar_ficha(id_txt):
         ("CITA CARGA", fmt_cita(v.get("cita_carga"))), ("FOLIO CLIENTE", g("folio_cliente")),
         ("FUMIGACION", g("fumigacion")), ("CITA DESCARGA", fmt_cita(v.get("cita_descarga"))),
         ("INSTRUCCIONES ESPECIALES", g("instrucciones")),
-    ], destacado="PEDIDO")
-    st.markdown('<p class="er-ficha-tip">📸 Toma la captura de esta pantalla (en Windows: <b>Win + Shift + S</b>). '
-                '&nbsp;·&nbsp; <a href="?" target="_self">← Volver al TMS</a></p>', unsafe_allow_html=True)
+    ], destacado="PEDIDO", pagina=pagina)
+    if pagina:
+        st.markdown('<p class="er-ficha-tip">📸 Toma la captura de esta pantalla (en Windows: <b>Win + Shift + S</b>). '
+                    '&nbsp;·&nbsp; <a href="?" target="_self">← Volver al TMS</a></p>', unsafe_allow_html=True)
+    else:
+        st.markdown('<p class="er-ficha-tip">📸 Toma la captura (en Windows: <b>Win + Shift + S</b>) y cierra con la '
+                    '<b>✕</b> de arriba.</p>', unsafe_allow_html=True)
+
+
+@st.dialog("📸 Ficha del pedido", width="medium")
+def ventana_ficha(id_):
+    mostrar_ficha(id_, pagina=False)
+
+
+@st.dialog("📸 Estatus para el cliente", width=1400)
+def ventana_estatus(plantilla, tablas):
+    st.markdown(estilo.VENTANA_CAPTURA_CSS, unsafe_allow_html=True)
+    st.markdown(ec.html_captura(plantilla, tablas), unsafe_allow_html=True)
+    st.markdown('<p class="er-ficha-tip">📸 Toma la captura (en Windows: <b>Win + Shift + S</b>) y cierra con la '
+                '<b>✕</b> de arriba.</p>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ acceso con usuario y contraseña
 ficha_id = st.query_params.get("ficha")        # si viene en la liga, se abre la FICHA del pedido y nada mas
@@ -172,7 +190,7 @@ if estatus_id:
     if estatus_id not in ec.PLANTILLAS:
         st.error("Liga de estatus no válida.")
     else:
-        st.markdown(estilo.FICHA_CSS.replace("max-width: 980px", "max-width: 1500px"), unsafe_allow_html=True)
+        st.markdown(estilo.PAGINA_CAPTURA_CSS.replace("max-width: 980px", "max-width: 1500px"), unsafe_allow_html=True)
         _f = ec.Fuentes()
         _tablas = {s_.clave: ec.armar(estatus_id, s_.clave, _f)[0] for s_ in ec.PLANTILLAS[estatus_id]["secciones"]}
         st.markdown(ec.html_captura(estatus_id, _tablas), unsafe_allow_html=True)
@@ -388,7 +406,11 @@ if st.session_state.get("mensaje"):
 
 # ------------------------------------------------------------------ pestañas (cada perfil ve solo las suyas)
 claves_tabs = perm["pestanas"] + (["seg"] if es_master else [])
-T = dict(zip(claves_tabs, st.tabs([PESTANAS[k] for k in claves_tabs])))
+try:                                     # key: la pagina recuerda en que pestaña estabas (tras guardar, avisos, etc.)
+    _pestanas = st.tabs([PESTANAS[k] for k in claves_tabs], key=f"pestanas_{rol}")
+except TypeError:                        # Streamlit viejo (sin key en tabs)
+    _pestanas = st.tabs([PESTANAS[k] for k in claves_tabs])
+T = dict(zip(claves_tabs, _pestanas))
 
 
 def pendiente(df, rol):
@@ -424,6 +446,113 @@ def confirmar_borrado():
         st.rerun()
     if c2.button("No, conservar", use_container_width=True):
         st.rerun()
+
+
+# ================================================================== CAMBIOS SIN GUARDAR
+# Lo que alguien capturo y no ha guardado se recuerda aqui (plan_pend / est_pend) para:
+#  - preguntar "¿Guardar o descartar?" si cambia de dia, tipo de operacion o cliente
+#  - avisar el navegador si intenta cerrar o recargar la pagina
+#  - guardarlo solo cada AUTOGUARDADO_MIN minutos (solo si pasa las revisiones)
+AUTOGUARDADO_MIN = getattr(cfg, "AUTOGUARDADO_MIN", 5)
+
+
+def guardar_plan_pendiente(p, quien, automatico=False):
+    """p = {'base', 'editado', 'dia', 'tipo', 'claves'}. Devuelve (True, (resumen, n_finalizados)) o (False, errores)."""
+    errores = reglas.validar_editor(p["base"], p["editado"])
+    if errores:
+        return False, errores
+    defaults = {} if p["tipo"] == "(Todos)" else {"tipo_operacion": p["tipo"]}
+    lo_que_cambio = reglas.diferencias(p["base"], p["editado"], p["claves"])
+    r = bd.guardar_plan(p["base"], p["editado"], p["dia"], p["claves"], defaults)
+    for accion, objeto, detalle in lo_que_cambio:
+        bd.bitacora(quien, f"PLAN_{accion}", objeto, detalle + (" · (guardado automático)" if automatico else ""))
+    auto = bd.finalizar_viajes_completos(devolver_viajes=True)
+    for id_v, ped, eco_v in auto:
+        bd.bitacora("SISTEMA", "FINALIZADO_AUTOMATICO", f"viaje #{id_v} · pedido {ped or '—'} · eco {eco_v or '—'}",
+                    "Tenía todos sus tiempos capturados")
+    st.session_state.pop("plan_pend", None)
+    st.session_state.pop("plan_base", None)
+    st.session_state.pop("autoguardado_error", None)
+    st.session_state.version += 1
+    return True, (r, len(auto))
+
+
+@st.dialog("💾 Tienes cambios sin guardar", dismissible=False)
+def preguntar_guardar_plan():
+    p = st.session_state.plan_pend
+    st.write(f"En el **Plan del día {p['dia']:%d/%m/%Y}** hay **{p['n']} viaje(s) con cambios sin guardar**. "
+             "¿Qué quieres hacer con ellos?")
+    c1, c2 = st.columns(2)
+    if c1.button("💾 Guardar", type="primary", use_container_width=True, key="dlg_plan_si"):
+        ok, res = guardar_plan_pendiente(p, USR)
+        if ok:
+            st.session_state.mensaje = f"Cambios del {p['dia']:%d/%m/%Y} guardados ✅"
+            st.rerun()
+        st.error("No se pudieron guardar:\n\n" + "\n".join(f"- {e}" for e in res)
+                 + "\n\nDescártalos, o regresa a ese día para corregirlos.")
+    if c2.button("Descartar", use_container_width=True, key="dlg_plan_no"):
+        bd.bitacora(USR, "PLAN_CAMBIOS_DESCARTADOS", f"plan del {p['dia']}", f"{p['n']} viaje(s) con cambios sin guardar")
+        st.session_state.pop("plan_pend", None)
+        st.session_state.pop("plan_base", None)
+        st.rerun()
+
+
+@st.dialog("💾 Tienes cambios sin guardar", dismissible=False)
+def preguntar_guardar_estatus():
+    p = st.session_state.est_pend
+    st.write(f"En el **estatus de {p['plantilla']}** hay **{p['n']} dato(s) sin guardar**. ¿Qué quieres hacer con ellos?")
+    c1, c2 = st.columns(2)
+    if c1.button("💾 Guardar", type="primary", use_container_width=True, key="dlg_est_si"):
+        _guardar_estatus(p["plantilla"], p["secciones"], USR)
+        st.session_state.pop("est_pend", None)
+        st.session_state.est_ver = st.session_state.get("est_ver", 0) + 1
+        st.session_state.mensaje = f"Estatus de {p['plantilla']} guardado ✅"
+        st.rerun()
+    if c2.button("Descartar", use_container_width=True, key="dlg_est_no"):
+        st.session_state.pop("est_pend", None)
+        st.session_state.est_ver = st.session_state.get("est_ver", 0) + 1
+        st.rerun()
+
+
+def aviso_al_salir(hay_pendientes):
+    """Si hay cambios sin guardar, el navegador pregunta antes de cerrar o recargar la pagina."""
+    import streamlit.components.v1 as components
+    components.html(
+        "<script>try{const w=window.parent;w.__tmsPendiente=" + ("true" if hay_pendientes else "false") + ";"
+        "if(!w.__tmsAviso){w.__tmsAviso=1;w.addEventListener('beforeunload',function(e){"
+        "if(w.__tmsPendiente){e.preventDefault();e.returnValue='';}});}}catch(err){}</script>", height=0)
+
+
+@st.fragment(run_every=AUTOGUARDADO_MIN * 60)
+def autoguardado():
+    """Cada AUTOGUARDADO_MIN minutos guarda solo lo pendiente (si pasa las revisiones)."""
+    ahora = datetime.now()
+    ultimo = st.session_state.get("autoguardado_ultimo")
+    if ultimo is None:                                 # primera vez en esta sesion: solo arranca el reloj
+        st.session_state.autoguardado_ultimo = ahora
+    elif (ahora - ultimo).total_seconds() >= AUTOGUARDADO_MIN * 60 - 5:
+        st.session_state.autoguardado_ultimo = ahora
+        guardo = []
+        p = st.session_state.get("plan_pend")
+        if p:
+            ok, res = guardar_plan_pendiente(p, USR, automatico=True)
+            if ok:
+                guardo.append(f"plan del {p['dia']:%d/%m}")
+            else:
+                st.session_state.autoguardado_error = res
+        e = st.session_state.get("est_pend")
+        if e:
+            _guardar_estatus(e["plantilla"], e["secciones"], USR, automatico=True)
+            st.session_state.pop("est_pend", None)
+            st.session_state.est_ver = st.session_state.get("est_ver", 0) + 1
+            guardo.append(f"estatus de {e['plantilla']}")
+        if guardo:
+            st.session_state.autoguardado_hora = ahora
+            st.session_state.mensaje = f"💾 Guardado automático ({ahora:%H:%M}): " + " y ".join(guardo)
+            st.rerun(scope="app")
+    hora = st.session_state.get("autoguardado_hora")
+    st.caption(f"💾 Guardado automático cada {AUTOGUARDADO_MIN} min"
+               + (f" · último {hora:%H:%M}" if hora else ""))
 
 
 # ================================================================== PLAN DEL DÍA
@@ -552,6 +681,9 @@ if "plan" in T:
         }
 
         ctx_key = f"{dia}|{rol}|{tipo_sel}|{abiertos}|{st.session_state.get('filtro_pendientes')}|{st.session_state.version}"
+        pend_previo = st.session_state.get("plan_pend")
+        if pend_previo and pend_previo["ctx"] != ctx_key:      # cambio de dia/tipo/filtro con cambios sin guardar
+            preguntar_guardar_plan()
         guardado = st.session_state.get("plan_base")
         base = guardado[1] if guardado and guardado[0] == ctx_key else df_tab       # con cambios sin guardar, o fresco
         ver = st.session_state.get("plan_ver", 0)
@@ -578,6 +710,14 @@ if "plan" in T:
             st.rerun()
 
         pendientes_guardar = reglas.contar_cambios(df_tab, editado, claves_ed)
+        if pendientes_guardar:                                   # se recuerda para preguntar / guardar solo
+            st.session_state.plan_pend = {"ctx": ctx_key, "base": df_tab, "editado": editado, "dia": dia,
+                                          "tipo": tipo_sel, "claves": claves_ed, "n": pendientes_guardar}
+        elif (st.session_state.get("plan_pend") or {}).get("ctx") == ctx_key:
+            st.session_state.pop("plan_pend", None)
+        if st.session_state.get("autoguardado_error"):
+            st.warning("💾 El guardado automático no pudo guardar tus cambios del plan. Corrige esto y guarda:\n\n"
+                       + "\n".join(f"- {e}" for e in st.session_state.autoguardado_error))
 
         with zona_botones:
             b1, b2, b3 = st.columns([1.2, 1.2, 5])
@@ -587,6 +727,8 @@ if "plan" in T:
                         else "🟢 Sin cambios pendientes")
         if descartar:
             st.session_state.pop("plan_base", None)
+            st.session_state.pop("plan_pend", None)
+            st.session_state.pop("autoguardado_error", None)
             st.session_state.version += 1
             st.rerun()
 
@@ -640,23 +782,13 @@ if "plan" in T:
         guardar_abajo = st.button("💾 Guardar cambios", type="primary", key="guardar_abajo")
         if guardar_arriba or guardar_abajo:
             with st.spinner("Revisando unidades, operadores y remolques..."):
-                errores = reglas.validar_editor(df_tab, editado)
-            if errores:
+                ok, res = guardar_plan_pendiente({"base": df_tab, "editado": editado, "dia": dia, "tipo": tipo_sel,
+                                                  "claves": claves_ed}, USR)
+            if not ok:
                 st.error("**No se guardó nada.** Corrige estas asignaciones (tus cambios siguen en la tabla):\n\n"
-                         + "\n".join(f"- {e}" for e in errores))
+                         + "\n".join(f"- {e}" for e in res))
             else:
-                defaults = {} if tipo_sel == "(Todos)" else {"tipo_operacion": tipo_sel}
-                lo_que_cambio = reglas.diferencias(df_tab, editado, claves_ed)      # para la bitácora
-                r = bd.guardar_plan(df_tab, editado, dia, claves_ed, defaults)
-                for accion, objeto, detalle in lo_que_cambio:
-                    bd.bitacora(USR, f"PLAN_{accion}", objeto, detalle)
-                auto = bd.finalizar_viajes_completos(devolver_viajes=True)
-                n_auto = len(auto)
-                for id_v, ped, eco_v in auto:
-                    bd.bitacora("SISTEMA", "FINALIZADO_AUTOMATICO", f"viaje #{id_v} · pedido {ped or '—'} · eco {eco_v or '—'}",
-                                "Tenía todos sus tiempos capturados")
-                st.session_state.pop("plan_base", None)
-                st.session_state.version += 1
+                r, n_auto = res
                 st.session_state.mensaje = (
                     f"Guardado ✅  Nuevos: {r['nuevos']} · Modificados: {r['cambios']} · Borrados: {r['borrados']}"
                     + (f" · 🏁 {n_auto} viaje(s) completo(s) finalizado(s) solos: su unidad y operador ya están disponibles"
@@ -674,8 +806,11 @@ if "plan" in T:
             etiquetas = {int(r["id"]): f"{r['pedido']} · ECO {r['eco']} · {r['operador']} · {r['origen']} → {r['destino']}"
                          for _, r in listas_ficha.iterrows()}
             elegido = st.selectbox("Pedido", list(etiquetas), format_func=etiquetas.get, key="ficha_sel")
-            st.link_button("📸 Abrir ficha (se abre en otra pestaña)",
-                           listas_ficha.loc[listas_ficha["id"] == elegido, "ficha"].iloc[0])
+            f1, f2, _ = st.columns([1.4, 2, 3])
+            if f1.button("📸 Ver ficha", type="primary", key="ficha_ventana",
+                         help="Se abre encima del plan, lista para la captura. Ciérrala con la ✕."):
+                ventana_ficha(elegido)
+            f2.link_button("Abrir en otra pestaña", listas_ficha.loc[listas_ficha["id"] == elegido, "ficha"].iloc[0])
 
 # ================================================================== NUEVO PEDIDO (solo ATC)
 def _link_automatico(lado, clave_lugar, clave_link):
@@ -1191,8 +1326,8 @@ if "mon" in T:
 
 
 # ================================================================== ESTATUS PARA CLIENTES (TC)
-def _guardar_estatus(plantilla, secciones_df, quien):
-    """Compara lo que quedo en las tablas contra lo que se mostro y guarda SOLO lo que se escribio a mano."""
+def _cambios_estatus(secciones_df):
+    """Lo que se escribio a mano en las tablas de estatus y aun no se guarda: (cambios, borrar, n_datos)."""
     cambios, borrar, n_campos = {}, [], 0
     for sec_clave, (mostrado, editado, autos, cols) in secciones_df.items():
         mostrado = mostrado.set_index("id")
@@ -1218,11 +1353,18 @@ def _guardar_estatus(plantilla, secciones_df, quien):
                     d["_status_folio"] = ec._t(r.get("folio")) if "folio" in r else ""
             if d != datos:
                 cambios[id_] = d
+    return cambios, borrar, n_campos
+
+
+def _guardar_estatus(plantilla, secciones_df, quien, automatico=False):
+    """Compara lo que quedo en las tablas contra lo que se mostro y guarda SOLO lo que se escribio a mano."""
+    cambios, borrar, n_campos = _cambios_estatus(secciones_df)
     ec.guardar_datos(cambios, quien.get("usuario", "") if isinstance(quien, dict) else str(quien))
     ec.borrar_filas(borrar)
     if cambios or borrar:
         bd.bitacora(quien, "ESTATUS_CLIENTE_GUARDADO", plantilla,
-                    f"{len(cambios)} renglón(es) con cambios · {n_campos} dato(s) · {len(borrar)} renglón(es) quitado(s)")
+                    f"{len(cambios)} renglón(es) con cambios · {n_campos} dato(s) · {len(borrar)} renglón(es) quitado(s)"
+                    + (" · (guardado automático)" if automatico else ""))
     return len(cambios), len(borrar)
 
 
@@ -1238,6 +1380,9 @@ if "est" in T:
     plantilla = st.selectbox("Cliente", nombres, key="est_cliente",
                              index=nombres.index("PEPSICO DEDICADO") if "PEPSICO DEDICADO" in nombres else 0)
     conf_p = ec.PLANTILLAS[plantilla]
+    est_previo = st.session_state.get("est_pend")
+    if est_previo and est_previo["plantilla"] != plantilla:    # cambio de cliente con cambios sin guardar
+        preguntar_guardar_estatus()
     ver_e = st.session_state.get("est_ver", 0)
     fuentes = ec.Fuentes()
     secciones_df, tablas = {}, {}
@@ -1283,18 +1428,30 @@ if "est" in T:
         secciones_df[sec.clave] = (mostrado, editado, autos, sec.columnas)
         if not conf_p.get("fijas"):
             if st.button("➕ Agregar fila", key=f"est_mas_{plantilla}_{sec.clave}"):
+                if (st.session_state.get("est_pend") or {}).get("plantilla") == plantilla:
+                    _guardar_estatus(plantilla, st.session_state.est_pend["secciones"], USR)   # no perder lo escrito
+                    st.session_state.pop("est_pend", None)
                 ec.agregar_fila(plantilla, sec.clave, quien=USR["usuario"])
                 st.session_state.est_ver = ver_e + 1
                 st.rerun()
 
-    g1, g2, _ = st.columns([1.3, 2, 4])
+    _c, _b, _n = _cambios_estatus(secciones_df)
+    if _c or _b:
+        st.session_state.est_pend = {"plantilla": plantilla, "secciones": secciones_df, "n": _n + len(_b)}
+        st.caption(f"🟠 **{_n + len(_b)} dato(s) sin guardar**")
+    elif (st.session_state.get("est_pend") or {}).get("plantilla") == plantilla:
+        st.session_state.pop("est_pend", None)
+    g1, g2, g3, _ = st.columns([1.3, 1.6, 1.8, 2])
     if g1.button("💾 Guardar estatus", type="primary", key="est_guardar"):
         n, b = _guardar_estatus(plantilla, secciones_df, USR)
+        st.session_state.pop("est_pend", None)
         st.session_state.est_ver = ver_e + 1
         st.session_state.mensaje = f"Estatus de {plantilla} guardado ✅  ({n} renglón(es) con cambios" + \
                                    (f", {b} quitado(s))" if b else ")")
         st.rerun()
-    g2.link_button("📸 Abrir pantalla para captura", f"{base_url()}/?estatus={plantilla.replace('+', '%2B').replace(' ', '%20')}")
+    if g2.button("📸 Ver para captura", key="est_ventana", help="Se abre encima, lista para la captura. Ciérrala con la ✕."):
+        ventana_estatus(plantilla, tablas)
+    g3.link_button("Abrir en otra pestaña", f"{base_url()}/?estatus={plantilla.replace('+', '%2B').replace(' ', '%20')}")
     st.caption("Lo que no guardes no aparece en la captura. Las columnas con 🔒 se calculan solas y las de ⚙️ salen del "
                "plan de carga pero puedes corregirlas.")
     st.markdown("**Vista para captura**")
@@ -1617,5 +1774,10 @@ if "seg" in T and es_master:        # doble candado: la pestaña solo existe par
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("Elige la fecha final del rango.")
+
+if perm["editar"]:
+    with st.sidebar:
+        autoguardado()
+        aviso_al_salir(bool(st.session_state.get("plan_pend") or st.session_state.get("est_pend")))
 
 estilo.pie()

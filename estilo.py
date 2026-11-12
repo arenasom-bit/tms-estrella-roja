@@ -130,13 +130,27 @@ def pie():
 
 
 # ---------------------------------------------------------- FICHA DEL PEDIDO (pantalla para tomar captura)
-FICHA_CSS = """
+# Pantalla completa para captura (liga ?ficha= / ?estatus=): sin menus y SIEMPRE blanca, aunque el celular este en modo oscuro
+PAGINA_CAPTURA_CSS = """
 <style>
 [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stHeader"] { display: none !important; }
 .block-container { padding-top: 1.2rem !important; max-width: 980px !important; }
-/* pantallas para captura: SIEMPRE blancas con letra negra, aunque el celular o navegador este en modo oscuro */
 :root, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stBottomBlockContainer"] {
     background: #FFFFFF !important; color-scheme: light !important; }
+</style>
+"""
+
+# Ventana encima (dialogo con su X): fondo blanco para que la captura salga igual que el formato
+VENTANA_CAPTURA_CSS = """
+<style>
+div[role="dialog"] { background: #FFFFFF !important; color: #000000 !important; color-scheme: light !important; }
+div[role="dialog"] h2, div[role="dialog"] p, div[role="dialog"] span { color: #08457C; }
+div[role="dialog"] button[aria-label="Close"] svg { color: #000000 !important; fill: #000000 !important; }
+</style>
+"""
+
+FICHA_CSS = """
+<style>
 table.er-ficha { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 6px auto 0 auto; background: #FFFFFF; }
 table.er-ficha td { border: 2px solid #000; padding: 5px 10px; font-size: 17px; color: #000; text-align: center;
                     word-wrap: break-word; vertical-align: middle; }
@@ -153,11 +167,12 @@ table.er-ficha tr.grande td { height: 150px; }
 """
 
 
-def ficha(filas, destacado):
+def ficha(filas, destacado, pagina=True):
     """filas: lista de (etiqueta, valor). 'destacado' = etiqueta de la fila roja (PEDIDO).
-    Las etiquetas CITA ... van en gris y INSTRUCCIONES ESPECIALES con la fila mas alta (como el formato en Excel)."""
+    Las etiquetas CITA ... van en gris y INSTRUCCIONES ESPECIALES con la fila mas alta (como el formato en Excel).
+    pagina=True: pantalla completa para captura · False: dentro de una ventana encima del TMS."""
     from html import escape
-    st.markdown(FICHA_CSS, unsafe_allow_html=True)
+    st.markdown((PAGINA_CAPTURA_CSS if pagina else VENTANA_CAPTURA_CSS) + FICHA_CSS, unsafe_allow_html=True)
     partes = ['<table class="er-ficha">']
     for etiqueta, valor in filas:
         vacio = valor in (None, "")
