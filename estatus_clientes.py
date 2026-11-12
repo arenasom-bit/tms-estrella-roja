@@ -597,6 +597,7 @@ CSS_CAPTURA = """
 .er-est .cab .titulo { flex:1; text-align:center; font-family:'ADLaM Display', 'Aptos Narrow', Arial, sans-serif;
           font-weight:700; font-size:20px; padding:4px 10px; letter-spacing:.5px; }
 .er-est table { border-collapse:collapse; width:100%; }
+.er-est td { background:#FFFFFF; }
 .er-est th { font-weight:700; font-size:12px; padding:5px 6px; border:1px solid #000; text-align:center; white-space:nowrap; }
 .er-est td { font-weight:700; font-size:12px; padding:5px 6px; border:1px solid #000; text-align:center;
              vertical-align:middle; }

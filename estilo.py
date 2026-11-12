@@ -134,14 +134,19 @@ FICHA_CSS = """
 <style>
 [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stHeader"] { display: none !important; }
 .block-container { padding-top: 1.2rem !important; max-width: 980px !important; }
-table.er-ficha { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 6px auto 0 auto; }
+/* pantallas para captura: SIEMPRE blancas con letra negra, aunque el celular o navegador este en modo oscuro */
+:root, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stBottomBlockContainer"] {
+    background: #FFFFFF !important; color-scheme: light !important; }
+table.er-ficha { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 6px auto 0 auto; background: #FFFFFF; }
 table.er-ficha td { border: 2px solid #000; padding: 5px 10px; font-size: 17px; color: #000; text-align: center;
                     word-wrap: break-word; vertical-align: middle; }
 table.er-ficha td.et { width: 27%; font-weight: 700; background: #FFFFFF; }
 table.er-ficha td.et.gris { background: #D9D9D9; }
 table.er-ficha tr.cabecera td.et { background: #C00000; color: #FFFFFF; }
-table.er-ficha td.vl { font-weight: 500; }
-table.er-ficha td.vl.vacio { color: #888; }
+table.er-ficha td.vl { font-weight: 500; background: #FFFFFF; color: #000000 !important; }
+table.er-ficha td.vl.vacio { color: #888888 !important; }
+table.er-ficha td.et { color: #000000; }
+.er-ficha-tip a { color: #005DB4 !important; }
 table.er-ficha tr.grande td { height: 150px; }
 .er-ficha-tip { color: #636663; font-size: 13px; margin: 8px 0 0 0; text-align: center; }
 </style>
