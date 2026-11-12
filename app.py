@@ -8,6 +8,33 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
+import importlib as _importlib
+import os as _os
+import sys as _sys
+
+# Al publicar cambios, Streamlit solo vuelve a leer app.py: los demas archivos del TMS se quedan en memoria
+# con la version vieja. Aqui se recargan los que cambiaron (el TMS sigue funcionando, no hace falta reiniciar).
+_MODULOS_TMS = ["configuracion", "columnas", "nube", "base_datos", "calculos", "conciliacion", "reglas", "estilo",
+                "omnitracs", "zam", "estatus_clientes", "respaldos", "importar_plan", "usuarios_excel", "catalogos_excel"]
+
+
+def _recargar_modulos_cambiados():
+    viejo = "nube" in _sys.modules and not hasattr(_sys.modules["nube"], "_sin_repetidos")
+    for _n in _MODULOS_TMS:
+        _m = _sys.modules.get(_n)
+        if _m is None or not getattr(_m, "__file__", None):
+            continue
+        try:
+            _t = _os.path.getmtime(_m.__file__)
+        except OSError:
+            continue
+        if viejo or (hasattr(_m, "_cargado_mtime") and _t > _m._cargado_mtime):
+            _m = _importlib.reload(_m)
+        _m._cargado_mtime = _t
+
+
+_recargar_modulos_cambiados()
+
 import base_datos as bd
 import calculos
 import catalogos_excel
@@ -25,7 +52,7 @@ import zam
 from columnas import (CATALOGO_DE, CATALOGOS, COLUMNAS, CONTEXTO, ESTATUS_CERRADOS, FICHA_REQUERIDOS, LISTAS,
                       PENDIENTES, PERMISOS, PESTANAS, ROLES, SITUACIONES, TIPO_POR_CLAVE, TITULO_POR_CLAVE)
 
-VERSION_TMS = "12/11 v2"            # se ve en la pantalla de entrada: sirve para saber que version esta publicada
+VERSION_TMS = "12/11 v3"            # se ve en la pantalla de entrada: sirve para saber que version esta publicada
 st.set_page_config(page_title="TMS · Estrella Roja",
                    page_icon=str(estilo.ISOTIPO) if estilo.ISOTIPO.exists() else "🚛", layout="wide")
 bd.crear_tablas()
