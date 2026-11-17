@@ -15,7 +15,8 @@ import sys as _sys
 # Al publicar cambios, Streamlit solo vuelve a leer app.py: los demas archivos del TMS se quedan en memoria
 # con la version vieja. Aqui se recargan los que cambiaron (el TMS sigue funcionando, no hace falta reiniciar).
 _MODULOS_TMS = ["configuracion", "columnas", "nube", "base_datos", "calculos", "conciliacion", "reglas", "estilo",
-                "omnitracs", "zam", "estatus_clientes", "respaldos", "importar_plan", "usuarios_excel", "catalogos_excel"]
+                "omnitracs", "zam", "estatus_clientes", "respaldos", "importar_plan", "usuarios_excel", "catalogos_excel",
+                "operativo"]
 
 
 def _recargar_modulos_cambiados():
@@ -45,6 +46,7 @@ import estilo
 import importar_plan
 import nube
 import omnitracs
+import operativo
 import reglas
 import respaldos
 import usuarios_excel
@@ -1510,6 +1512,134 @@ if "est" in T:
 
 
 # ================================================================== CATÁLOGOS
+# ================================================================== LEVANTAR OPERATIVO (Reporte de Robo)
+def _op_llenar(eco):
+    """Llena el formulario con lo que sabe el sistema del tracto (catálogo, plan, ZAM, Omnitracs)."""
+    datos, info = operativo.datos_unidad(eco)
+    for k, _ in operativo.CAMPOS:
+        st.session_state[f"op_{k}"] = datos.get(k, "")
+    st.session_state.op_info = info
+    st.session_state.op_cargado = eco
+
+
+def _op_ubicacion_actual():
+    eco = st.session_state.get("op_cargado")
+    if eco:
+        st.session_state.op_ubicacion = operativo.texto_ubicacion(operativo.posicion_tracto(eco))
+
+
+def _op_datos():
+    return {k: st.session_state.get(f"op_{k}", "") for k, _ in operativo.CAMPOS}
+
+
+@st.fragment(run_every=cfg.SEGUNDOS_ENTRE_CONSULTAS)
+def panel_operativo(eco, remolque):
+    """Mapa del tracto y la caja + ligas para compartir. Se actualiza solo cada minuto."""
+    if (cfg.CONSULTAR_AUTOMATICAMENTE and omnitracs.credenciales_configuradas()
+            and bd.segundos_desde_ultima_consulta() >= cfg.SEGUNDOS_ENTRE_CONSULTAS - 2):
+        try:
+            omnitracs.actualizar_en_bd()
+        except Exception:
+            pass
+    pos = operativo.posiciones([eco])
+    p_t = operativo.posicion_tracto(eco, pos)
+    p_c = operativo.posicion_caja(remolque, pos) if remolque else None
+    st.caption(f"🔄 Se actualiza solo cada {cfg.SEGUNDOS_ENTRE_CONSULTAS} s · Omnitracs consultado: "
+               f"{bd.leer_meta('ultima_consulta') or 'nunca'}")
+
+    puntos = []
+    for p, nombre, color in ((p_t, f"TRACTO {eco}", [214, 40, 40, 235]), (p_c, f"CAJA {remolque}", [0, 93, 180, 235])):
+        if p:
+            vel = f"{p['velocidad']:.0f} km/h" if p["velocidad"] is not None else "s/d"
+            puntos.append({"alias": nombre, "latitud": p["lat"], "longitud": p["lon"], "color": color,
+                           "tip": f"{nombre}\n{p['fecha']:%d/%m %H:%M} ({operativo.hace(p['fecha'])})\n{vel} · {p['ignicion']}"})
+    if puntos:
+        st.caption("🗺️ 🔴 tracto · 🔵 caja")
+        dibujar_mapa(pd.DataFrame(puntos), True)
+    else:
+        st.info("Omnitracs no tiene posición del tracto ni de la caja.")
+
+    st.markdown("##### 🔗 Ligas para compartir")
+    c1, c2 = st.columns(2)
+    for col, p, titulo, sin in ((c1, p_t, f"🚚 Tracto {eco}", "El tracto no reporta en Omnitracs."),
+                                (c2, p_c, f"🛞 Caja {remolque or '—'}",
+                                 "La caja no reporta en Omnitracs." if remolque else "El viaje no tiene caja asignada.")):
+        with col:
+            st.markdown(f"**{titulo}**")
+            if not p:
+                st.warning(sin)
+                continue
+            vel = f"{p['velocidad']:.0f} km/h" if p["velocidad"] is not None else "s/d"
+            st.caption(f"Reportó {p['fecha']:%d/%m/%Y %H:%M} ({operativo.hace(p['fecha'])}) · {vel} · {p['ignicion']}"
+                       + (f"  \n📍 {p['lugar']}" if p.get("lugar") else ""))
+            st.code(p["liga"], language=None, wrap_lines=True)
+            st.link_button("Abrir en Google Maps", p["liga"])
+
+
+if "op" in T:
+  with T["op"]:
+    st.subheader("🚨 Levantar operativo · Reporte de Robo")
+    st.caption("Escoge el **ECO del tracto**: el reporte se llena solo con el catálogo, el plan de carga, ZAM y Omnitracs. "
+               "Corrige lo que haga falta, escribe la **mercancía** y copia el texto para WhatsApp "
+               "(botón 📋 en la esquina del recuadro).")
+    eco_op = st.selectbox("ECONÓMICO (tracto)", bd.opciones_catalogo("unidades"), index=None,
+                          placeholder="Escribe o elige el ECO", key="op_sel_eco")
+    if not eco_op:
+        st.session_state.pop("op_cargado", None)        # al volver a elegir, se llena de nuevo
+        st.info("Elige un ECO para empezar.")
+    else:
+        if st.session_state.get("op_cargado") != eco_op or "op_tipo_unidad" not in st.session_state:
+            _op_llenar(eco_op)          # ECO nuevo, o la página se refrescó a medias y el formulario quedó vacío
+        info = st.session_state.get("op_info", {})
+        if info.get("viaje"):
+            st.success(f"📦 {info['viaje']}")
+        else:
+            st.warning("Esta unidad no tiene viaje activo ni asignado en el plan ni en ZAM: "
+                       "origen, destino, operador y caja quedan para llenarse a mano.")
+        b1, b2, _ = st.columns([1.3, 1.6, 3])
+        b1.button("🔄 Llenar de nuevo", on_click=_op_llenar, args=(eco_op,), key="op_rellenar")
+        b2.button("📍 Poner ubicación actual", on_click=_op_ubicacion_actual, key="op_ubic")
+
+        izq, der = st.columns(2)
+        mitad = (len(operativo.CAMPOS) - 1) // 2 + 1
+        for i, (k, etiqueta) in enumerate(operativo.CAMPOS):
+            if k == "ubicacion":
+                continue
+            (izq if i < mitad else der).text_input(etiqueta, key=f"op_{k}",
+                                                   placeholder="Escribe la mercancía" if k == "mercancia" else None)
+        st.text_area(operativo.ETIQUETA["ubicacion"], key="op_ubicacion", height=90)
+        faltan = [operativo.ETIQUETA[k] for k in ("placa", "vin", "marca", "anio", "modelo", "telefono", "mercancia")
+                  if not str(st.session_state.get(f"op_{k}", "")).strip()]
+        if faltan:
+            st.caption("⚠️ Sin dato: " + ", ".join(faltan)
+                       + ". (VIN, marca, año y modelo se cargan en Catálogos › Vehículos; el teléfono en Operadores).")
+
+        datos_op = _op_datos()
+        texto_op = operativo.texto_whatsapp(datos_op)
+        st.markdown("**📲 Texto para WhatsApp** (pasa el mouse por el recuadro y da clic en 📋 para copiar)")
+        st.code(texto_op, language=None, wrap_lines=True)
+        from urllib.parse import quote as _quote
+        w1, w2, w3, _ = st.columns([1.6, 1.6, 1.8, 2])
+        w1.link_button("📲 Abrir en WhatsApp", "https://wa.me/?text=" + _quote(texto_op))
+        w2.download_button("⬇️ Descargar .txt", texto_op.encode("utf-8"),
+                           file_name=f"reporte_robo_{eco_op}_{datetime.now():%Y%m%d_%H%M}.txt", mime="text/plain")
+        if w3.button("📝 Registrar operativo", type="primary", key="op_registrar",
+                     help="Guarda este reporte en el historial y en la bitácora (quién y a qué hora)."):
+            operativo.registrar(USR, datos_op, texto_op)
+            st.toast(f"Operativo de la unidad {eco_op} registrado", icon="🚨")
+
+        st.divider()
+        st.markdown("#### 🗺️ Dónde está")
+        panel_operativo(eco_op, info.get("remolque", ""))
+
+    with st.expander("📜 Operativos registrados (últimos 30)"):
+        hist = operativo.historial()
+        if hist.empty:
+            st.caption("Todavía no hay operativos registrados.")
+        else:
+            st.dataframe(hist.rename(columns=str.upper), hide_index=True)
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _excel_catalogos(con_datos, version):
     return catalogos_excel.generar_plantilla(con_datos)
@@ -1588,7 +1718,7 @@ if "cat" in T:
             "operador": st.column_config.SelectboxColumn(
                 "OPERADOR HABITUAL", options=bd.opciones_catalogo("operadores", "nombre")),
             "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES),
-            "placas": "PLACAS"})
+            "placas": "PLACAS", "vin": "VIN", "marca": "MARCA", "modelo": "MODELO", "anio": "AÑO"})
     with sub[1]:
         st.caption("Solo los remolques en SITUACIÓN = OPERANDO se pueden asignar a un viaje.")
         editor_catalogo("remolques", {"remolque": "REMOLQUE", "tipo": "TIPO", "placas": "PLACAS",

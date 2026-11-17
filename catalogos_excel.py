@@ -28,7 +28,9 @@ from columnas import CATALOGOS, SITUACIONES
 HOJAS_ALIAS = {"TRACTO": "VEHICULOS", "TRACTOS": "VEHICULOS", "UNIDADES": "VEHICULOS", "VEHÍCULOS": "VEHICULOS"}
 ENCABEZADOS_ALIAS = {
     "unidades": {"ESTATUS FLOTAS": "situacion", "ESTATUS FLOTA": "situacion", "ESTATUS": "situacion",
-                 "SITUACIÓN": "situacion", "UNIDAD": "eco"},
+                 "SITUACIÓN": "situacion", "UNIDAD": "eco",
+                 "NIV": "vin", "SERIE": "vin", "NUMERO DE SERIE": "vin", "NÚMERO DE SERIE": "vin", "NO. SERIE": "vin",
+                 "ANIO": "anio", "ANO": "anio", "AÑO MODELO": "anio", "PLACA": "placas"},
     "remolques": {"ECO": "remolque", "CAJA": "remolque", "ESTATUS FLOTAS": "situacion", "ESTATUS FLOTA": "situacion",
                   "ESTATUS": "situacion", "SITUACIÓN": "situacion"},
 }
@@ -37,7 +39,8 @@ SIN_DATO = {"N/A", "NA", "-", "PTE", "S/P", "SIN PLACAS"}
 # nombre de hoja -> (tabla, {columna_bd: encabezado en el Excel})
 HOJAS = {
     "VEHICULOS": ("unidades", {"eco": "ECO", "operador": "OPERADOR HABITUAL", "situacion": "SITUACION",
-                               "placas": "PLACAS"}),
+                               "placas": "PLACAS", "vin": "VIN", "marca": "MARCA", "modelo": "MODELO",
+                               "anio": "AÑO"}),
     "REMOLQUES": ("remolques", {"remolque": "REMOLQUE", "tipo": "TIPO", "placas": "PLACAS", "situacion": "SITUACION"}),
     "OPERADORES": ("operadores", {"nomina": "NOMINA", "nombre": "NOMBRE", "telefono": "TELEFONO"}),
     "CLIENTES": ("clientes", {"nombre": "CLIENTE", "rfc": "RFC"}),

@@ -94,7 +94,7 @@ SITUACIONES = ["OPERANDO", "CORRALON", "SINIESTRO", "TALLER", "NO DISPONIBLE"]
 
 # Catalogos: tabla -> columnas (la primera es la llave unica, no se repite)
 CATALOGOS = {
-    "unidades": ["eco", "operador", "situacion", "placas"],   # placas = assets_id de la vista ZAM
+    "unidades": ["eco", "operador", "situacion", "placas", "vin", "marca", "modelo", "anio"],   # placas = assets_id de la vista ZAM; vin/marca/modelo/anio = para el Reporte de Robo
     "remolques": ["remolque", "tipo", "placas", "situacion"],   # situacion: solo OPERANDO se puede asignar
     "operadores": ["nomina", "nombre", "telefono"],
     "clientes": ["nombre", "rfc"],
@@ -132,6 +132,7 @@ PESTANAS = {
     "nuevo": "➕ Nuevo pedido",
     "mon": "📍 Monitoreo",
     "est": "📣 Estatus clientes",         # el estatus que TC le manda a cada cliente (captura de pantalla)
+    "op": "🚨 Levantar operativo",       # Reporte de Robo listo para WhatsApp + mapa del tracto y la caja
     "cat": "📚 Catálogos",
     "exp": "📤 Exportar CSV",
     "seg": "🔐 Usuarios y bitácora",      # solo usuarios MASTER
@@ -140,7 +141,7 @@ PESTANAS = {
 PERMISOS = {
     "ATC":   {"pestanas": ["plan", "nuevo", "mon", "cat", "exp"], "agregar_borrar": True,  "editar": True,  "zam": True, "monitoreo_editar": False},
     "OPS":   {"pestanas": ["plan", "mon", "cat", "exp"],          "agregar_borrar": False, "editar": True,  "zam": True, "monitoreo_editar": False},
-    "TC":    {"pestanas": ["plan", "mon", "est", "exp"],                 "agregar_borrar": False, "editar": True,  "zam": False, "monitoreo_editar": True},
+    "TC":    {"pestanas": ["plan", "mon", "est", "op", "exp"],                 "agregar_borrar": False, "editar": True,  "zam": False, "monitoreo_editar": True},
     "TODOS": {"pestanas": ["plan", "exp"],                        "agregar_borrar": False, "editar": False, "zam": False, "monitoreo_editar": False},
 }
 

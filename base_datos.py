@@ -117,6 +117,9 @@ def _crear_tablas():
                 con.execute(f"ALTER TABLE monitoreo_obs ADD COLUMN {col} TEXT")
         # desde cuando esta detenida cada unidad (para la columna DETENIDA DESDE)
         con.execute("CREATE TABLE IF NOT EXISTS pos_referencia (alias TEXT PRIMARY KEY, lat REAL, lon REAL, desde TEXT)")
+        # operativos levantados (Reporte de Robo) - historial
+        con.execute("CREATE TABLE IF NOT EXISTS operativos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, "
+                    "usuario TEXT, eco TEXT, remolque TEXT, tipo TEXT, texto TEXT)")
         _situacion_por_defecto(con)
         _semilla_estadias(con)
         # usuarios y bitacora (quien hizo que)
