@@ -50,6 +50,10 @@ OMNITRACS_URL = "https://command.omnitracs.com/customer-services/VehicleActivity
 OMNITRACS_USUARIO = _secreto("OMNITRACS_USUARIO")
 OMNITRACS_CONTRASENA = _secreto("OMNITRACS_CONTRASENA")
 OMNITRACS_CLIENTE = _secreto("OMNITRACS_CLIENTE")
+CLIENTE_OMNITRACS_ER = "mx371fe3"      # codigo de cliente de Estrella Roja en Omnitracs (siempre el mismo)
+if OMNITRACS_CLIENTE.startswith("ESCRIBE_AQUI"):
+    OMNITRACS_CLIENTE = CLIENTE_OMNITRACS_ER
+# Si no hay usuario/contrasena, el TMS los pide en una ventana al entrar (ver app.py: ventana_omnitracs)
 
 # ---- Como consultar posiciones ----
 MINUTOS_HISTORIAL = 120          # cuantos minutos hacia atras pedimos a Omnitracs

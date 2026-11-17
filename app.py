@@ -419,6 +419,88 @@ def aviso_nube():
 with st.sidebar:
     aviso_nube()
 
+
+# ------------------------------------------------------------------ Omnitracs: usuario y contraseña compartidos
+@st.cache_resource(show_spinner=False)
+def _omni_compartido():
+    """Lo que alguien escribió en la ventana de Omnitracs. Vive en el servidor: sirve para TODOS los conectados
+    (se pierde si la página se reinicia; entonces el primero que entre lo vuelve a poner)."""
+    return {"usuario": None, "contrasena": None, "quien": None, "cuando": None}
+
+
+_OMNI = _omni_compartido()
+if _OMNI["usuario"] and (not omnitracs.credenciales_configuradas() or cfg.OMNITRACS_USUARIO != _OMNI["usuario"]):
+    omnitracs.poner_credenciales(_OMNI["usuario"], _OMNI["contrasena"])     # p. ej. tras recargar configuracion.py
+
+
+def _omni_omitir():
+    st.session_state.omni_omitido = True
+
+
+def _omni_exito():
+    st.success(st.session_state.omni_ok)
+    if st.button("Listo", type="primary", key="omni_listo"):
+        st.session_state.pop("omni_ok", None)
+        st.session_state.omni_omitido = True
+        st.rerun()
+
+
+@st.dialog("📡 Conectar Omnitracs", on_dismiss=_omni_omitir)
+def ventana_omnitracs():
+    if st.session_state.get("omni_ok"):
+        _omni_exito()
+        return
+    if omnitracs.credenciales_configuradas() and not st.session_state.get("omni_cambiar"):
+        st.success(f"✅ Omnitracs ya está conectado" + (f" (lo conectó {_OMNI['quien']})" if _OMNI["quien"] else "") + ".")
+        if st.button("Cerrar", key="omni_cerrar"):
+            _omni_omitir()
+            st.rerun()
+        return
+    st.write("Para que **las posiciones de las unidades se actualicen**, escribe el usuario y la contraseña de Omnitracs.")
+    st.caption(f"Código de cliente: **{cfg.OMNITRACS_CLIENTE}** · Al conectar, queda conectado para todos "
+               "los que están usando el TMS. Si cierras esta ventana, el TMS funciona pero las posiciones no se actualizan.")
+    with st.form("omni_form", border=False):
+        u_omni = st.text_input("Usuario de Omnitracs", key="omni_u")
+        p_omni = st.text_input("Contraseña de Omnitracs", type="password", key="omni_p")
+        conectar = st.form_submit_button("🔌 Conectar", type="primary")
+    if conectar:
+        with st.spinner("Probando con Omnitracs..."):
+            try:
+                n = omnitracs.probar_credenciales(u_omni, p_omni)
+            except Exception as e:
+                st.error(f"❌ No se pudo conectar con Omnitracs: {e}")
+                bd.bitacora(USR, "OMNITRACS_CONEXION_FALLIDA", "", f"usuario Omnitracs: {(u_omni or '').strip()}")
+                return
+        _OMNI.update(usuario=u_omni.strip(), contrasena=p_omni, quien=USR["nombre"],
+                     cuando=datetime.now().strftime("%d/%m/%Y %H:%M"))
+        bd.bitacora(USR, "OMNITRACS_CONECTADO", "", f"usuario Omnitracs: {u_omni.strip()} · {n} unidades")
+        st.session_state.pop("omni_cambiar", None)
+        st.session_state.omni_ok = (f"✅ Conectado con Omnitracs: respondieron **{n} unidades**. "
+                                    "Las posiciones ya se actualizan para todos.")
+        _omni_exito()
+        return
+    if st.button("Ahora no", key="omni_ahora_no"):
+        _omni_omitir()
+        st.rerun()
+
+
+def _omni_abrir(cambiar=False):
+    st.session_state.omni_omitido = False
+    st.session_state.pop("omni_ok", None)
+    st.session_state.omni_cambiar = cambiar
+
+
+with st.sidebar:
+    _err_omni = bd.leer_meta("ultimo_error") or ""
+    if not omnitracs.credenciales_configuradas():
+        st.warning("📡 Omnitracs sin conectar: las posiciones no se actualizan.")
+        st.button("🔌 Conectar Omnitracs", on_click=_omni_abrir, key="omni_btn")
+    elif "usuario, contrasena" in _err_omni:
+        st.warning("📡 Omnitracs rechazó el usuario o la contraseña.")
+        st.button("🔌 Cambiar usuario de Omnitracs", on_click=_omni_abrir, args=(True,), key="omni_btn")
+    else:
+        st.caption("📡 Omnitracs: conectado" + (f" · por {_OMNI['quien']} ({_OMNI['cuando']})" if _OMNI["quien"] else ""))
+
 if perm["zam"]:
     with st.sidebar:
         st.divider()
@@ -1175,7 +1257,8 @@ def panel_monitoreo(dia, tipo_sel, puede_editar):
             pass  # el error queda guardado y se muestra abajo
 
     if not omnitracs.credenciales_configuradas():
-        st.warning("Falta poner tu usuario, contraseña y código de cliente de Omnitracs en configuracion.py")
+        st.warning("📡 Omnitracs no está conectado: las posiciones no se actualizan. "
+                    "Usa el botón **🔌 Conectar Omnitracs** de la barra de la izquierda.")
     err = bd.leer_meta("ultimo_error")
     if err:
         st.error(f"Último error al consultar Omnitracs: {err}")
@@ -1962,6 +2045,13 @@ elif _preg == "est" and st.session_state.get("est_pend") and abrir_dialogo():
     preguntar_guardar_estatus()
 elif _preg and not _DIALOGO["abierto"]:
     st.session_state.pop("preguntar", None)
+
+# Omnitracs sin usuario/contraseña (o rechazados): se pide en una ventana; se puede cerrar con ✕ o "Ahora no"
+_omni_falta = (not omnitracs.credenciales_configuradas()
+               or (st.session_state.get("omni_cambiar") and not st.session_state.get("omni_omitido")))
+if ((_omni_falta or st.session_state.get("omni_ok")) and not st.session_state.get("omni_omitido")
+        and abrir_dialogo()):
+    ventana_omnitracs()
 
 if perm["editar"]:
     with st.sidebar:

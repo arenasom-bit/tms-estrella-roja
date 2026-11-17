@@ -3,6 +3,7 @@
 #  (es lo mismo que hacia tu script de Google, pero en Python)
 # ==========================================================
 import re
+import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +13,34 @@ import base_datos as bd
 import configuracion as cfg
 
 ZONA_MX = timezone(timedelta(hours=-6))  # GMT-6
+
+
+_candado_cred = threading.Lock()
+
+
+def poner_credenciales(usuario, contrasena, cliente=None):
+    """Deja puestas las credenciales para todo el TMS (todas las sesiones de este servidor)."""
+    cfg.OMNITRACS_USUARIO, cfg.OMNITRACS_CONTRASENA = usuario, contrasena
+    cfg.OMNITRACS_CLIENTE = cliente or getattr(cfg, "CLIENTE_OMNITRACS_ER", cfg.OMNITRACS_CLIENTE)
+
+
+def probar_credenciales(usuario, contrasena, cliente=None):
+    """Prueba usuario/contrasena con Omnitracs. Si conecta, quedan puestas para todos y se guardan las
+    posiciones; devuelve cuantas unidades respondieron. Si no conecta, deja todo como estaba y lanza el error."""
+    usuario, contrasena = (usuario or "").strip(), contrasena or ""
+    if not usuario or not contrasena:
+        raise ValueError("Escribe usuario y contraseña.")
+    with _candado_cred:
+        antes = (cfg.OMNITRACS_USUARIO, cfg.OMNITRACS_CONTRASENA, cfg.OMNITRACS_CLIENTE)
+        poner_credenciales(usuario, contrasena, cliente)
+        try:
+            lista = consultar_posiciones()
+        except Exception:
+            cfg.OMNITRACS_USUARIO, cfg.OMNITRACS_CONTRASENA, cfg.OMNITRACS_CLIENTE = antes
+            raise
+    bd.guardar_posiciones(lista)
+    bd.guardar_meta("ultimo_error", "")
+    return len(lista)
 
 
 def credenciales_configuradas():
