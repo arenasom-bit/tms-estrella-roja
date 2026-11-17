@@ -1722,7 +1722,7 @@ if "cat" in T:
     with sub[1]:
         st.caption("Solo los remolques en SITUACIÓN = OPERANDO se pueden asignar a un viaje.")
         editor_catalogo("remolques", {"remolque": "REMOLQUE", "tipo": "TIPO", "placas": "PLACAS",
-                                      "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES)})
+                                      "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES), "vin": "VIN"})
     with sub[2]:
         editor_catalogo("operadores", {"nomina": "NÓMINA", "nombre": "NOMBRE", "telefono": "TELÉFONO"})
     with sub[3]:

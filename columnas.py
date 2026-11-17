@@ -95,7 +95,7 @@ SITUACIONES = ["OPERANDO", "CORRALON", "SINIESTRO", "TALLER", "NO DISPONIBLE"]
 # Catalogos: tabla -> columnas (la primera es la llave unica, no se repite)
 CATALOGOS = {
     "unidades": ["eco", "operador", "situacion", "placas", "vin", "marca", "modelo", "anio"],   # placas = assets_id de la vista ZAM; vin/marca/modelo/anio = para el Reporte de Robo
-    "remolques": ["remolque", "tipo", "placas", "situacion"],   # situacion: solo OPERANDO se puede asignar
+    "remolques": ["remolque", "tipo", "placas", "situacion", "vin"],   # situacion: solo OPERANDO se puede asignar
     "operadores": ["nomina", "nombre", "telefono"],
     "clientes": ["nombre", "rfc"],
     "origenes": ["nombre", "direccion", "link"],

@@ -22,6 +22,15 @@ from columnas import ESTATUS_CERRADOS
 TIPO_UNIDAD = "TRACTOCAMION"
 COLOR_FIJO = "BLANCO CON LOGO DE ESTRELLA ROJA"
 RAZON_SOCIAL = "VIAJES ESTRELLA ROJA"
+# Toda la flota de tractos es Freightliner Cascadia (si el catalogo trae otro dato, gana el catalogo)
+MARCA_FLOTA = "FREIGHTLINER"
+MODELO_FLOTA = "CASCADIA"
+
+
+def anio_por_eco(eco):
+    """El año sale de los 2 primeros digitos del ECO: 2510 -> 2025, 2144 -> 2021."""
+    e = "".join(ch for ch in str(eco or "") if ch.isdigit())
+    return f"20{e[:2]}" if len(e) >= 3 else ""
 
 # (clave, etiqueta en el reporte). El orden es el del reporte.
 CAMPOS = [
@@ -222,6 +231,8 @@ def datos_unidad(eco):
         partes = [f"CAJA {remolque}"]
         if _t(r.get("placas")):
             partes.append(f"PLACAS {_t(r.get('placas'))}")
+        if _t(r.get("vin")):
+            partes.append(f"VIN {_t(r.get('vin'))}")
         if _t(r.get("tipo")):
             partes.append(_t(r.get("tipo")))
         caja = " · ".join(partes)
@@ -238,9 +249,9 @@ def datos_unidad(eco):
         "eco": eco,
         "placa": _t(u.get("placas")),
         "vin": _t(u.get("vin")),
-        "marca": _t(u.get("marca")),
-        "anio": _t(u.get("anio")),
-        "modelo": _t(u.get("modelo")),
+        "marca": _t(u.get("marca")) or MARCA_FLOTA,
+        "anio": _t(u.get("anio")) or anio_por_eco(eco),
+        "modelo": _t(u.get("modelo")) or MODELO_FLOTA,
         "color": COLOR_FIJO,
         "razon_social": RAZON_SOCIAL,
         "origen": origen,
