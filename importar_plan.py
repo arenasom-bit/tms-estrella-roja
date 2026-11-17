@@ -37,7 +37,8 @@ COMUNES = {
     "CITA DE CARGA": "cita_carga", "CITA CARGA": "cita_carga",
     "LLEGADA CARGA": "llegada_carga", "SALIDA CARGA": "salida_carga",
     "MOTIVO DE INCUMPLIMIENTO CARGA": "motivo_carga",
-    "CITA DE DESCARGA": "cita_descarga", "LLEGADA DESCARGA": "llegada_descarga", "SALIDA DESCARGA": "salida_descarga",
+    "CITA DE DESCARGA": "cita_descarga", "CITA DESCARGA": "cita_descarga",
+    "LLEGADA DESCARGA": "llegada_descarga", "SALIDA DESCARGA": "salida_descarga",
     "MOTIVO DE INCUMPLIMIENTO DESCARGA": "motivo_descarga",
     "INICIO DE RUTA": "inicio_ruta", "LLEGADA A DESTINO": "llegada_destino",
     "MOTIVO DE INCUMPLIMIENTO TRANSITO": "motivo_transito",
@@ -76,8 +77,26 @@ HOJAS = {
     "DHL CENTRO": {"tipo": "DHL CENTRO SEN", "cliente": "DHL EXPRESS MEXICO"},
     "DHL MTY": {"tipo": "DHL MTY SEN", "cliente": "DHL EXPRESS MEXICO", "extra": {"REAL DE SALIDA": "salida_carga"}},
     "RYC": {"tipo": "RYC REF SEN", "cliente": "BACHOCO COMERCIAL"},
+    # ---- nombres de pestañas de los planes de otros meses (2026)
+    "DEDICADO PEPSICO": {"tipo": "PEPSICO DEDICADO", "cliente": "COMERCIALIZADORA PEPSICO MEXICO", "modalidad": True},
+    "K&N": {"tipo": "DDS", "cliente": "KUEHNE + NAGEL",
+            "extra": {"CONTROL DE RUTA": "folio_cliente", "ADENDA": "folio_confirmacion"}},
+    "COPPEL": {"tipo": "COPPEL DEDICADO SEN", "cliente": "COPPEL",
+               "extra": {"HORA LLEGADA CARGA": "llegada_carga", "HORA REAL DE SALIDA": "salida_carga",
+                         "HORA DE LLEGADA A DESCARGA": "llegada_descarga", "SALIDA DE DESCARGA": "salida_descarga"}},
+    "SPOT COPPEL": {"tipo": "COPPEL SPOT SEN", "cliente": "COPPEL"},
+    "BARCEL": {"tipo": "BARCEL DEDICADO", "cliente": "BARCEL",
+               "extra": {"POSICIONAMIENTO BASCULA": "cita_carga", "LLEGADA REAL BASCULA": "llegada_carga",
+                         "SALIDA CAMPO": "salida_carga", "MOTIVO DE INCUMPLIMIENTO POSICIONAMIENTO": "motivo_carga",
+                         "MOTIVO DE INCUMPLIMIENTO POS": "motivo_carga"}},
+    "SIGMA": {"tipo": "SIGMA DEDICADO", "cliente": "SIGMA ALIMENTOS",
+              "extra": {"ORDEN CARGA": "folio_cliente", "HORA DESCARGA": "llegada_descarga"}},
+    "T.THERMOS": {"tipo": "THERMOS DEDICADO", "cliente": "THERMOS"},
+    "DHL PEAK SEASON": {"tipo": "DHL PEAK SEASON", "cliente": "DHL EXPRESS MEXICO"},
+    "DHL": {"tipo": "DHL PEAK SEASON", "cliente": "DHL EXPRESS MEXICO"},
+    "PEMEX": {"tipo": "PEMEX SPOT", "cliente": "PEMEX"},
 }
-HOJAS_REPETIDAS = ["PEPSICO DEDICADO (2)"]      # copia exacta de otra pestaña: se ignora
+HOJAS_REPETIDAS = ["PEPSICO DEDICADO (2)", "K&N (2)"]      # copia exacta de otra pestaña: se ignora
 
 FECHAS = {k for k, t in TIPO_POR_CLAVE.items() if t == "fecha"}
 NUMEROS = {k for k, t in TIPO_POR_CLAVE.items() if t in ("entero", "dinero")}
@@ -226,14 +245,31 @@ def _cuando(v):
     return None
 
 
+class _Indice:
+    """Busquedas rapidas en el TMS por llave (pedido, CP, # viaje) y por ECO (miles de renglones por archivo)."""
+    def __init__(self, tms):
+        self.tms = tms.set_index("id", drop=False)
+        self.tms.index.name = None                     # que "id" siga siendo solo columna (para ordenar)
+        self.por = {c: {} for c in LLAVES + ["eco"]}
+        for c in self.por:
+            for i, val in zip(tms["id"], tms[c].map(_k)):
+                if val:
+                    self.por[c].setdefault(val, []).append(i)
+
+    def ids(self, columna, valor, usados):
+        return sorted(i for i in self.por[columna].get(valor, ()) if i not in usados)
+
+
 def _buscar(v, tms, usados):
+    idx = tms if isinstance(tms, _Indice) else _Indice(tms)
     for llave in LLAVES:
         val = _k(v.get(llave))
         if val:
-            m = tms[(tms[llave].map(_k) == val) & (~tms["id"].isin(usados))]
-            if len(m):
-                return m.sort_values("id").iloc[0], llave
+            ids = idx.ids(llave, val, usados)
+            if ids:
+                return idx.tms.loc[ids[0]], llave
     eco, t = _k(v.get("eco")), _cuando(v)
+    tms = idx.tms.loc[idx.ids("eco", eco, usados)] if eco else idx.tms.iloc[0:0]
     if eco and t is not None:
         m = tms[(tms["eco"].map(_k) == eco) & (~tms["id"].isin(usados))
                 & (tms["tipo_operacion"].fillna(v["tipo_operacion"]) == v["tipo_operacion"])]
@@ -362,6 +398,7 @@ def sincronizar(archivo, aplicar=True, quien="SISTEMA", hojas=None):
     for c in LLAVES + ["eco", "tipo_operacion", "cita_carga"]:
         if c not in tms.columns:
             tms[c] = None
+    tms = _Indice(tms)
     usados, nuevos, cambios, sin_cambio = set(), [], [], 0
     res = {"duplicados": sum(len(c) for _, c in dup), "leidos": len(excel), "nuevos": 0, "actualizados": 0, "sin_cambio": 0, "finalizados": 0,
            "cancelados": 0, "por_hoja": {}, "detalle": []}
