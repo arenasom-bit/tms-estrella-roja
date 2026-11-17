@@ -5,6 +5,7 @@
 #  Las CONTRASENAS ya no van aqui. Se leen, en este orden, de:
 #    1) variables de entorno (OMNITRACS_USUARIO, OMNITRACS_CONTRASENA, OMNITRACS_CLIENTE)
 #    2) el archivo configuracion_local.py (NO lo compartas ni lo subas a ningun lado)
+#    3) los Secrets de Streamlit (pagina de la nube)
 # ==========================================================
 import os
 import time as _time
@@ -23,9 +24,19 @@ except ImportError:
     _local = None
 
 
+def _de_secrets(nombre):
+    """Secrets de Streamlit (pagina de la nube: Settings > Secrets). En la PC normalmente no hay."""
+    try:
+        import streamlit as st
+        valor = st.secrets.get(nombre)
+        return str(valor).strip() if valor else None
+    except Exception:
+        return None
+
+
 def _secreto(nombre):
-    """Lee un dato sensible de variable de entorno o de configuracion_local.py."""
-    valor = os.environ.get(nombre) or getattr(_local, nombre, None)
+    """Lee un dato sensible de: variable de entorno, configuracion_local.py o Secrets de Streamlit."""
+    valor = os.environ.get(nombre) or getattr(_local, nombre, None) or _de_secrets(nombre)
     return valor or "ESCRIBE_AQUI"
 
 
