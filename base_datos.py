@@ -61,6 +61,15 @@ def crear_tablas():
 
 def _crear_tablas():
     refrescar_desde_nube()
+    # Arranque con tms.db vacio (p. ej. la pagina de la nube): primero bajar TODO de internet; si se crean
+    # tablas vacias antes, las altas automaticas (ZAM) chocan con lo que internet ya tiene.
+    for _ in range(3):
+        if not nube.activa() or nube.estado()["lista"]:
+            break
+        import time as _t
+        _t.sleep(3)
+        nube._estado["ultima_revision"] = 0           # permitir reintentar ya
+        refrescar_desde_nube()
     guardables = [c for c in COLUMNAS if c.tipo != "calculado"]
     with conexion() as con:
         con.execute("PRAGMA journal_mode=WAL")

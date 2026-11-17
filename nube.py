@@ -241,6 +241,18 @@ def _sin_repetidos(todo):
     return limpias, quitadas
 
 
+def _sin_duplicados(todo):
+    """Un alta (INSERT) de un registro que internet YA tiene no debe atorar lo demas: se vuelve
+    INSERT OR IGNORE (el registro de internet se queda como esta; los UPDATE que siguen si se aplican)."""
+    limpias, cambiadas = [], 0
+    for s, p in todo:
+        if re.match(r"\s*INSERT\s+INTO\s", s, re.I):
+            s = re.sub(r"^\s*INSERT\s+INTO\s", "INSERT OR IGNORE INTO ", s, count=1, flags=re.I)
+            cambiadas += 1
+        limpias.append((s, p))
+    return limpias, cambiadas
+
+
 def enviar(sentencias, ruta_bd):
     """Manda a internet lo que se acaba de guardar. Si no hay internet, lo deja en fila y lo reintenta despues."""
     import json
@@ -254,14 +266,27 @@ def enviar(sentencias, ruta_bd):
             try:
                 try:
                     v = _lote([(s, p) for s, p in todo])
-                except RuntimeError as e:          # una columna/tabla que ya existe en internet no debe atorar lo demas
-                    if not any(x in str(e).lower() for x in ("duplicate column", "already exists")):
+                except RuntimeError as e:          # una columna/tabla/registro que ya existe en internet no debe atorar lo demas
+                    err = str(e).lower()
+                    if any(x in err for x in ("duplicate column", "already exists")):
+                        limpias, quitadas = _sin_repetidos(todo)
+                        if not quitadas:
+                            raise
+                        _diag("repetidos_quitados", f"{quitadas} cambio(s) de estructura que ya existian · {e}")
+                    elif "unique constraint failed" in err:
+                        limpias, quitadas = _sin_duplicados(todo)
+                        if not quitadas:
+                            raise
+                        _diag("altas_repetidas", f"{quitadas} alta(s) de registros que internet ya tenia (se omiten) · {e}")
+                    else:
                         raise
-                    limpias, quitadas = _sin_repetidos(todo)
-                    if not quitadas:
-                        raise
-                    v = _lote(limpias) if limpias else _estado["version"]
-                    _diag("repetidos_quitados", f"{quitadas} cambio(s) de estructura que ya existian · {e}")
+                    try:
+                        v = _lote(limpias) if limpias else _estado["version"]
+                    except RuntimeError as e2:     # puede haber de los dos tipos a la vez
+                        if "unique constraint failed" not in str(e2).lower():
+                            raise
+                        limpias, _ = _sin_duplicados(limpias)
+                        v = _lote(limpias) if limpias else _estado["version"]
                 if atrasadas:
                     con.execute("DELETE FROM nube_pendiente WHERE id <= ?", [atrasadas[-1][0]])
                 if v is not None:
