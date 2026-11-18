@@ -10,8 +10,9 @@
 #
 #  Se activa poniendo TURSO_URL y TURSO_TOKEN en:
 #    - la nube: Streamlit > tu app > Settings > Secrets
-#    - la PC:   configuracion_local.py
-#  Sin esos datos, el TMS trabaja como siempre (solo con tms.db).
+#    - tareas de GitHub / scripts: variables de entorno
+#  El TMS local (servidor ERPCTCDL02 / PC) NUNCA usa Turso: trabaja con su propio tms.db
+#  (aunque configuracion_local.py traiga TURSO_*, se ignora).
 #
 #  Primera vez:  py nube.py subir     (sube TODO lo de tu tms.db a la base de internet)
 # ==========================================================
@@ -68,7 +69,9 @@ def forma_del_token():
 def _dato(nombre):
     if nombre in _cache:
         return _cache[nombre]
-    v = os.environ.get(nombre) or getattr(_local, nombre, None)
+    # Turso SOLO en la pagina de la nube (Secrets de Streamlit) o con variables de entorno (tareas de GitHub).
+    # El TMS local (servidor / PC) NUNCA se conecta: aunque su configuracion_local.py traiga TURSO_*, se ignora.
+    v = os.environ.get(nombre)
     if not v:
         try:                                   # en Streamlit Cloud los Secrets tambien llegan por aqui
             import streamlit as st
@@ -443,7 +446,7 @@ def refrescar(ruta_bd, cada_segundos=5):
 def subir(ruta_bd, forzar=False):
     """Sube TODAS las tablas de tms.db a la base de internet. Si la nube ya tiene viajes, pide forzar=True."""
     if not activa():
-        raise RuntimeError("Faltan TURSO_URL y TURSO_TOKEN (ponlos en configuracion_local.py).")
+        raise RuntimeError("Faltan TURSO_URL y TURSO_TOKEN (ponlos como variables de entorno).")
     try:
         _, n = consultar("SELECT COUNT(*) FROM viajes")
         ya = n[0][0] if n else 0

@@ -41,9 +41,8 @@ def _secreto(nombre):
 
 
 # ---- Base de datos en internet (Turso) ----
-# Para que la pagina en la nube y la PC usen la MISMA informacion y no se pierda nada:
-# pon TURSO_URL y TURSO_TOKEN en Streamlit (Settings > Secrets) y en configuracion_local.py.
-# Sin ellos, el TMS trabaja solo con el archivo tms.db de esta computadora. Ver nube.py.
+# SOLO la pagina de la nube (GitHub/Streamlit) la usa: TURSO_URL y TURSO_TOKEN van en Streamlit > Settings > Secrets.
+# El TMS local (servidor / PC) trabaja siempre con su propio tms.db. Ver nube.py.
 
 # ---- Datos de Omnitracs ----
 OMNITRACS_URL = "https://command.omnitracs.com/customer-services/VehicleActivityService"

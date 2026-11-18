@@ -192,6 +192,8 @@ if "usuario" not in st.session_state:
         st.caption(("☁️ Base en internet: conectada" if _e["lista"] else "☁️ Base en internet: sin conexión")
                    + (f" · {_p} cambio(s) esperando" if _p else "")
                    + (f" · {_e['error'][:140]}" if _e["error"] else "") + f" · versión {VERSION_TMS}")
+    else:
+        st.caption(f"💾 Base de datos local de esta computadora · versión {VERSION_TMS}")
     if entrar:
         datos_u, msg = bd.autenticar(u_in, p_in)
         if datos_u:
@@ -388,11 +390,12 @@ def panel_zam():
 def aviso_nube():
     """Barra lateral: si la base en internet esta conectada y al dia."""
     if not nube.activa():
-        if USR.get("perfil") == "MASTER":
-            d = nube.diagnostico()
-            st.caption("☁️ Base en internet: **NO conectada** · "
-                       f"TURSO_URL {'✅' if d['TURSO_URL'] else '❌'} · TURSO_TOKEN {'✅' if d['TURSO_TOKEN'] else '❌'}"
-                       + (f" · Secrets que ve la app: {', '.join(d['secrets']) or 'ninguno'}"))
+        d = nube.diagnostico()
+        if USR.get("perfil") == "MASTER" and d["TURSO_URL"] != d["TURSO_TOKEN"]:      # a medio configurar
+            st.caption("☁️ Base en internet a medio configurar · "
+                       f"TURSO_URL {'✅' if d['TURSO_URL'] else '❌'} · TURSO_TOKEN {'✅' if d['TURSO_TOKEN'] else '❌'}")
+        else:                                   # TMS local (servidor / PC): su propia base, sin internet
+            st.caption("💾 Base de datos local de esta computadora (tms.db)")
         return
     e = nube.estado()
     pend = nube.pendientes(bd.RUTA_BD)
@@ -1934,7 +1937,8 @@ if "seg" in T and es_master:        # doble candado: la pestaña solo existe par
                    f"{getattr(cfg, 'RESPALDO_HORA_FIN', 5)}:00, hora del centro de México), cuando nadie usa el TMS. "
                    f"Se guardan máximo {respaldos.dias()} días; los más viejos se borran solos. "
                    + ("Se guardan en la base de internet, así que no se pierden si la página se reinicia."
-                      if nube.activa() else "⚠️ Sin base en internet: se guardan solo en la carpeta respaldos de esta computadora."))
+                      if nube.activa() else "Este TMS usa su base local: los respaldos se guardan en la carpeta "
+                      "respaldos de esta computadora (conviene copiarlos a otro lugar de vez en cuando)."))
         st.info("🔔 Antes de modificar el TMS (cambios en GitHub), haz un respaldo con el botón de abajo.")
         if st.button("💾 Hacer respaldo ahora", type="primary", key="resp_ahora"):
             with st.spinner("Haciendo respaldo..."):
