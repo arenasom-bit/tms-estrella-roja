@@ -10,3 +10,7 @@ tms.db
 respaldos/
 configuracion_local.py
 logs/
+
+# datos personales (telefonos de operadores)
+operadores_telefonos.csv
+*.csv
