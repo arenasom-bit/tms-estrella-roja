@@ -16,7 +16,7 @@ import sys as _sys
 # con la version vieja. Aqui se recargan los que cambiaron (el TMS sigue funcionando, no hace falta reiniciar).
 _MODULOS_TMS = ["configuracion", "columnas", "nube", "base_datos", "calculos", "conciliacion", "reglas", "estilo",
                 "omnitracs", "zam", "estatus_clientes", "respaldos", "importar_plan", "usuarios_excel", "catalogos_excel",
-                "operativo"]
+                "operativo", "coherencia"]
 
 
 def _recargar_modulos_cambiados():
@@ -47,6 +47,7 @@ import importar_plan
 import nube
 import omnitracs
 import operativo
+import coherencia
 import reglas
 import respaldos
 import usuarios_excel
@@ -58,6 +59,7 @@ VERSION_TMS = "12/11 v4"            # se ve en la pantalla de entrada: sirve par
 st.set_page_config(page_title="TMS · Estrella Roja",
                    page_icon=str(estilo.ISOTIPO) if estilo.ISOTIPO.exists() else "🚛", layout="wide")
 bd.crear_tablas()
+coherencia.ejecutar()          # Plan, ZAM y Monitoreo de acuerdo (cada minuto como mucho)
 ec.crear_tabla()
 estilo.aplicar()
 
@@ -605,6 +607,7 @@ def guardar_plan_pendiente(p, quien, automatico=False):
     for id_v, ped, eco_v in auto:
         bd.bitacora("SISTEMA", "FINALIZADO_AUTOMATICO", f"viaje #{id_v} · pedido {ped or '—'} · eco {eco_v or '—'}",
                     "Tenía todos sus tiempos capturados")
+    coherencia.ejecutar(forzar=True, quien=quien)      # viajes viejos que la unidad ya dejó atrás
     st.session_state.pop("plan_pend", None)
     st.session_state.pop("plan_base", None)
     st.session_state.pop("autoguardado_error", None)
@@ -1073,7 +1076,11 @@ def _alerta(f, ahora):
             naranjas.append(f"🟠 Descarga en {_hm(falta)}")
     if f["estatus_viaje"] == "PROGRAMADO" and pd.notna(f["_cita_carga"]) and pd.isna(f["_lleg_carga"]) \
             and ahora > f["_cita_carga"]:
-        rojos.append(f"🔴 Cita de carga vencida {_hm((f['_cita_carga'] - ahora).total_seconds() / 60)}")
+        vencida = (ahora - f["_cita_carga"]).total_seconds() / 60
+        if vencida > 24 * 60:          # ya paso mas de un dia: casi seguro termino y no se capturo
+            rojos.append(f"🔴 Sin capturar desde {f['_cita_carga']:%d/%m %H:%M}: si ya terminó, márcala DISPONIBLE")
+        else:
+            rojos.append(f"🔴 Cita de carga vencida {_hm(vencida)}")
     if f["_sin_pos"]:
         naranjas.append("🟠 Sin posición")
     elif f["_reporto_min"] is not None and f["_reporto_min"] > cfg.MON_SIN_REPORTAR_MIN:
@@ -1094,7 +1101,7 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
     plan = cargar_plan(dia, True)
     abiertos = plan[~plan["estatus"].isin(ESTATUS_CERRADOS)].copy()
     abiertos["clave"] = abiertos["eco"].map(lambda e: omnitracs.normalizar_alias(e) if e else "")
-    abiertos = abiertos[abiertos["clave"] != ""].sort_values("cita_carga").drop_duplicates("clave")
+    abiertos = coherencia.viaje_actual(abiertos[abiertos["clave"] != ""])     # el viaje que la unidad trae AHORA
 
     # --- universo: catálogo de unidades (+ unidades del plan que no estén en el catálogo)
     uni = bd.leer_catalogo("unidades")[["eco", "operador", "situacion"]].rename(
@@ -1234,6 +1241,12 @@ def _refrescar_monitoreo():
 def _aplicar_monitoreo(cambios, situaciones, resumen):
     """Guarda lo escrito por TC en el Monitoreo, sincroniza la SITUACIÓN del catálogo y lo anota en la bitácora."""
     bd.guardar_monitoreo(cambios)
+    for eco_u, c in cambios.items():          # DISPONIBLE en Monitoreo = el viaje queda finalizado en el Plan
+        if c.get("estatus1") == ESTATUS1["DISPONIBLE"]:
+            n_fin = coherencia.finalizar_por_monitoreo(eco_u, USR)
+            if n_fin:
+                bd.guardar_monitoreo({eco_u: {"estatus1": None}})        # ya lo dice el plan: vuelve al automático
+                st.toast(f"Unidad {eco_u}: {n_fin} viaje(s) finalizado(s) en el Plan", icon="✅")
     for eco_u, sit in situaciones.items():
         antes_sit = bd.leer_catalogo("unidades").set_index("eco")["situacion"].get(eco_u)
         bd.poner_situacion(eco_u, sit)
@@ -1777,6 +1790,7 @@ if "cat" in T:
             if p2.button("✅ Poner al día el plan", type="primary", key="plan_aplicar"):
                 libro.seek(0)
                 r = importar_plan.sincronizar(libro, aplicar=True, quien=USR)
+                coherencia.ejecutar(forzar=True, quien=USR)
                 st.session_state.version += 1
                 st.session_state.mensaje = (f"Plan al día ✅  {r['nuevos']} nuevos · {r['actualizados']} actualizados · "
                                             f"{r['sin_cambio']} sin cambio · {r['duplicados']} copias repetidas juntadas")

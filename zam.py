@@ -108,6 +108,11 @@ def actualizar_catalogo():
         abiertos = [v for v in viajes if v["status"] == "open"]
         res = bd.sincronizar_zam(abiertos)
         cerrados = conciliacion.aplicar_cierres()         # pedidos que ZAM ya finalizo o cancelo
+        try:
+            import coherencia
+            coherencia.cerrar(coherencia.viajes_superados())   # viajes viejos que la unidad ya dejo atras
+        except Exception:
+            pass
         for id_v, ped, nuevo in cerrados:
             bd.bitacora("SISTEMA", "ZAM_CIERRE_AUTOMATICO", f"viaje #{id_v} · pedido {ped}", f"ZAM lo reporta {nuevo}")
         if cerrados:

@@ -88,12 +88,13 @@ def calcular_estatus(df):
     z = df["cita_descarga"].notna()
     aa = df["llegada_descarga"].notna()
     ab = df["salida_descarga"].notna()
+    # Cada hora capturada implica los pasos anteriores (si capturaron SALIDA CARGA ya cargo, aunque falte la llegada)
     est = pd.Series("", index=df.index, dtype=object)
-    est = est.mask(u, "PROGRAMADO")
-    est = est.mask(u & v, "CARGANDO")
-    est = est.mask(u & v & w, "TRANSITO CARGADO")
-    est = est.mask(u & v & w & z & aa, "DESCARGANDO")
-    est = est.mask(u & v & w & z & aa & ab, "DISPONIBLE")
+    est = est.mask(u | v | w | z, "PROGRAMADO")
+    est = est.mask(v, "CARGANDO")
+    est = est.mask(w, "TRANSITO CARGADO")
+    est = est.mask(aa, "DESCARGANDO")
+    est = est.mask(ab & (v | w | aa), "DISPONIBLE")
     return est
 
 

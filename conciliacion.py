@@ -175,7 +175,7 @@ def ecos_zam_que_son_del_plan(plan):
 
 # ---------------------------------------------------------- 2) cierres desde ZAM
 def aplicar_cierres():
-    """Viajes del TMS con PEDIDO = numero de viaje ZAM: si ZAM ya lo finalizo/cancelo, se marca igual aqui.
+    """Viajes del TMS con PEDIDO o # VIAJE = numero de viaje ZAM: si ZAM ya lo finalizo/cancelo, se marca igual aqui.
     Devuelve [(id, pedido, 'FINALIZADO'|'CANCELADO'), ...] de lo que se cambio."""
     if not getattr(cfg, "ZAM_AUTO_CERRAR", True):
         return []
@@ -183,13 +183,23 @@ def aplicar_cierres():
     if todos.empty:
         return []
     estado = {str(s): _k(e).lower() for s, e in zip(todos["shipment_id"], todos["status"])}
+    # La vista de ZAM solo trae viajes ABIERTOS: si uno que estaba abierto ya no aparece en las ultimas
+    # actualizaciones, ZAM ya lo cerro. (Solo si la ultima actualizacion trajo viajes, para no fallar por un corte.)
+    ultima = _t(bd.leer_meta("zam_ultima_sync"))
+    visto = pd.to_datetime(todos["actualizado"], errors="coerce")
+    if ultima is not None and int((visto >= ultima - pd.Timedelta(minutes=5)).sum()) >= 5:
+        for s, vto in zip(todos["shipment_id"], visto):
+            if pd.notna(vto) and vto < ultima - pd.Timedelta(hours=getattr(cfg, "ZAM_HORAS_PARA_CERRADO", 2)):
+                estado[str(s)] = "closed"
     fin = {e.lower() for e in getattr(cfg, "ZAM_ESTATUS_FINALIZADO", [])}
     can = {e.lower() for e in getattr(cfg, "ZAM_ESTATUS_CANCELADO", [])}
     viajes = bd.leer_viajes("0000-01-01", "9999-12-31")
     hechos = []
     for _, v in viajes.iterrows():
-        ped = _k(v.get("pedido"))
-        if not ped or v.get("finalizado") or v.get("cancelado"):
+        if v.get("finalizado") or v.get("cancelado"):
+            continue
+        ped = next((x for x in (_k(v.get("pedido")), _k(v.get("num_viaje"))) if x and x in estado), "")
+        if not ped:
             continue
         est = estado.get(ped)
         if est in fin:
