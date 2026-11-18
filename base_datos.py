@@ -129,6 +129,9 @@ def _crear_tablas():
         # operativos levantados (Reporte de Robo) - historial
         con.execute("CREATE TABLE IF NOT EXISTS operativos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, "
                     "usuario TEXT, eco TEXT, remolque TEXT, tipo TEXT, texto TEXT)")
+        # viajes que el sistema cree terminados pero les faltan horas: TC confirma (pudo haber devolucion)
+        con.execute("CREATE TABLE IF NOT EXISTS por_confirmar (viaje_id INTEGER PRIMARY KEY, eco TEXT, motivo TEXT, "
+                    "fuente TEXT, creado TEXT, estado TEXT, pospuesto_hasta TEXT, resuelto_por TEXT, resuelto TEXT)")
         _situacion_por_defecto(con)
         _semilla_estadias(con)
         # usuarios y bitacora (quien hizo que)

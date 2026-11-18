@@ -203,8 +203,12 @@ def aplicar_cierres():
             continue
         est = estado.get(ped)
         if est in fin:
-            bd.actualizar_viaje(int(v["id"]), {"finalizado": True})
-            hechos.append((int(v["id"]), ped, "FINALIZADO"))
+            completo = any(_t(v.get(c)) is not None for c in ("salida_descarga", "llegada_descarga"))
+            if completo:
+                bd.actualizar_viaje(int(v["id"]), {"finalizado": True})
+                hechos.append((int(v["id"]), ped, "FINALIZADO"))
+            else:                      # ZAM lo cerro pero faltan horas: puede haber devolucion -> TC confirma
+                hechos.append((int(v["id"]), ped, "POR CONFIRMAR"))
         elif est in can:
             bd.actualizar_viaje(int(v["id"]), {"cancelado": True})
             hechos.append((int(v["id"]), ped, "CANCELADO"))

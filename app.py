@@ -1068,6 +1068,8 @@ def _alerta(f, ahora):
     if not f["_viaje"]:
         return 3, ""
     rojos, naranjas = [], []
+    if f.get("_por_confirmar"):
+        return 1, "🔔 Por confirmar: ¿ya terminó? (arriba de la tabla)"
     if pd.notna(f["_cita_desc"]) and pd.isna(f["_lleg_desc"]):
         falta = (f["_cita_desc"] - ahora).total_seconds() / 60
         if falta < 0:
@@ -1178,6 +1180,9 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
     t["_cita_carga"], t["_lleg_carga"] = t["cita_carga"], t["llegada_carga"]
     t["para_carga"] = t.apply(lambda f: _para_cita(f["cita_carga"], f["llegada_carga"], ahora) if f["_viaje"] else "", axis=1)
     t["para_descarga"] = t.apply(lambda f: _para_cita(f["cita_descarga"], f["llegada_descarga"], ahora) if f["_viaje"] else "", axis=1)
+    pend = coherencia.pendientes_confirmar()
+    ids_pc = set(pend["viaje_id"].astype(int)) if not pend.empty else set()
+    t["_por_confirmar"] = t["id"].map(lambda i: pd.notna(i) and int(i) in ids_pc)
     al = t.apply(lambda f: _alerta(f, ahora), axis=1)
     t["_prio"], t["alerta"] = [a[0] for a in al], [a[1] for a in al]
 
@@ -1263,6 +1268,39 @@ def _aplicar_monitoreo(cambios, situaciones, resumen):
     st.toast(f"Guardado ({len(cambios)} unidades){extra}", icon="📝")
 
 
+def panel_por_confirmar(tipo_sel, puede_editar):
+    """🔔 Viajes que el sistema cree terminados pero sin horas: TC dice qué pasó (pudo haber devolución)."""
+    pc = coherencia.pendientes_confirmar()
+    if not pc.empty and tipo_sel != "(Todos)":
+        pc = pc[pc["tipo_operacion"] == tipo_sel]
+    if pc.empty:
+        return
+    with st.expander(f"🔔 {len(pc)} viaje(s) por confirmar: ¿ya terminaron?", expanded=True):
+        st.caption("ZAM ya los cerró o la unidad ya tiene un viaje posterior, pero **faltan horas de descarga**. "
+                   "Antes de dejar la unidad DISPONIBLE, confirma qué pasó (pudo haber devolución).")
+        vista = pd.DataFrame({
+            "¿QUÉ PASÓ?": [None] * len(pc), "VIAJE": pc["viaje_id"].astype(int), "ECO": pc["eco"],
+            "CLIENTE": pc["cliente"].fillna(pc["tipo_operacion"]), "ORIGEN": pc["origen"], "DESTINO": pc["destino"],
+            "CITA CARGA": pd.to_datetime(pc["cita_carga"], errors="coerce"), "MOTIVO": pc["motivo"]})
+        for c in ("ECO", "CLIENTE", "ORIGEN", "DESTINO", "MOTIVO"):
+            vista[c] = vista[c].fillna("").astype(str).replace("None", "")
+        ed = st.data_editor(vista, hide_index=True, disabled=[c for c in vista.columns if c != "¿QUÉ PASÓ?"],
+                            key=f"pc_ed_{len(pc)}_{int(pc['viaje_id'].sum())}",
+                            column_config={"¿QUÉ PASÓ?": st.column_config.SelectboxColumn(
+                                               "¿QUÉ PASÓ?", options=list(coherencia.OPCIONES), width="medium"),
+                                           "CITA CARGA": st.column_config.DatetimeColumn(format="DD/MM HH:mm")})
+        elegidos = ed[ed["¿QUÉ PASÓ?"].notna()]
+        if not puede_editar:
+            st.caption("🔒 Solo Torre de Control (TC) confirma estos viajes.")
+        elif st.button(f"💾 Aplicar ({len(elegidos)})", disabled=elegidos.empty, key="pc_aplicar", type="primary"):
+            for _, f in elegidos.iterrows():
+                coherencia.resolver(int(f["VIAJE"]), coherencia.OPCIONES[f["¿QUÉ PASÓ?"]], USR)
+            st.session_state.pop("mon_cache", None)
+            st.session_state.mon_ver = st.session_state.get("mon_ver", 0) + 1
+            st.toast(f"{len(elegidos)} viaje(s) confirmados", icon="🔔")
+            _refrescar_monitoreo()
+
+
 @st.fragment(run_every=cfg.SEGUNDOS_ENTRE_CONSULTAS)
 def panel_monitoreo(dia, tipo_sel, puede_editar):
     if (cfg.CONSULTAR_AUTOMATICAMENTE and omnitracs.credenciales_configuradas()
@@ -1279,6 +1317,7 @@ def panel_monitoreo(dia, tipo_sel, puede_editar):
     if err:
         st.error(f"Último error al consultar Omnitracs: {err}")
     st.caption(f"Última actualización: {bd.leer_meta('ultima_consulta') or 'nunca'}")
+    panel_por_confirmar(tipo_sel, puede_editar)
 
     if bd.leer_posiciones().empty:
         st.info("Todavía no hay posiciones guardadas.")

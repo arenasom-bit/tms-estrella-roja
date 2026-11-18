@@ -2,11 +2,11 @@
 #  coherencia.py - Que Plan de carga, ZAM y Monitoreo digan LO MISMO
 #
 #  1) VIAJES SUPERADOS: una unidad no puede seguir en un viaje viejo si ya hizo otro despues.
-#     - Viaje abierto SIN avance (sin llegada ni salida): se cierra ✅ si la misma unidad ya
-#       tiene un viaje posterior cuya cita ya paso (o que ya avanzo / ya se finalizo).
-#     - Viaje abierto CON avance (ya cargo, va en transito...): se cierra ✅ solo si la misma
-#       unidad ya empezo (llegada/salida de carga) o finalizo un viaje posterior.
-#  2) ZAM: si ZAM ya finalizo o cancelo el viaje (por PEDIDO o # VIAJE), se cierra igual aqui.
+#     - SEGURO (se cierra ✅ solo): la unidad ya EMPEZO o termino un viaje posterior, o el viaje
+#       tiene mas de 3 dias y ya hay viajes posteriores.
+#     - DUDOSO (solo paso la cita del siguiente viaje): va a 🔔 POR CONFIRMAR y TC decide.
+#  2) ZAM: si ZAM ya finalizo el viaje (por PEDIDO o # VIAJE) y el viaje tiene sus horas, se cierra;
+#     si le faltan horas (pudo haber DEVOLUCION) va a 🔔 POR CONFIRMAR. Cancelado en ZAM = ❌ aqui.
 #  3) MONITOREO -> PLAN: si TC pone ESTATUS 1 = DISPONIBLE en Monitoreo, el viaje abierto de
 #     esa unidad queda ✅ finalizado en el Plan (y la unidad libre en todos lados).
 #  Todo queda en la BITACORA. Corre solo (cada minuto, al guardar y al importar planes).
@@ -21,6 +21,7 @@ import calculos
 from columnas import ESTATUS_CERRADOS
 
 SEGUNDOS_ENTRE_REVISIONES = 60
+DIAS_CIERRE_SEGURO = 3          # un viaje superado con mas de estos dias se cierra solo (nadie lo va a confirmar)
 _ultima = {"t": 0.0}
 
 
@@ -74,12 +75,15 @@ def viajes_superados(ahora=None):
             if prueba.empty:
                 continue
             p = prueba.sort_values("_ref").iloc[0]
+            seguro = bool(prueba["_empezo"].any() or prueba["_fin"].any()
+                          or v["_ref"] < ahora - timedelta(days=DIAS_CIERRE_SEGURO))
             salida.append((int(v["id"]), v["eco"],
-                           f"la unidad ya hizo el viaje #{int(p['id'])} (cita {p['_ref']:%d/%m %H:%M})"))
+                           f"la unidad ya hizo el viaje #{int(p['id'])} (cita {p['_ref']:%d/%m %H:%M})", seguro))
     return salida
 
 
 def cerrar(ids_motivos, quien="SISTEMA", accion="AUTO_CIERRE_VIAJE"):
+    ids_motivos = [x[:3] for x in ids_motivos]
     if not ids_motivos:
         return 0
     ahora = bd.AHORA_TXT()
@@ -110,17 +114,92 @@ def ejecutar(forzar=False, quien="SISTEMA"):
     res = {"superados": 0, "zam": 0}
     try:
         import conciliacion
-        cerrados = conciliacion.aplicar_cierres()
-        for id_v, ped, nuevo in cerrados:
-            bd.bitacora("SISTEMA", "ZAM_CIERRE_AUTOMATICO", f"viaje #{id_v} · viaje ZAM {ped}", f"ZAM lo reporta {nuevo}")
-        res["zam"] = len(cerrados)
+        res["zam"] = registrar_cierres_zam(conciliacion.aplicar_cierres())
     except Exception:
         pass
     try:
-        res["superados"] = cerrar(viajes_superados(), quien)
+        sup = viajes_superados()
+        res["superados"] = cerrar([x for x in sup if x[3]], quien)
+        res["por_confirmar"] = poner_por_confirmar([x for x in sup if not x[3]], "PLAN")
     except Exception:
         pass
     return res
+
+
+def registrar_cierres_zam(cerrados):
+    """Resultado de conciliacion.aplicar_cierres(): bitacora de lo cerrado y a POR CONFIRMAR lo que falta."""
+    dudosos = []
+    for id_v, ped, nuevo in cerrados:
+        if nuevo == "POR CONFIRMAR":
+            dudosos.append((id_v, None, f"ZAM ya cerró el viaje {ped} pero faltan horas de descarga (¿devolución?)"))
+        else:
+            bd.bitacora("SISTEMA", "ZAM_CIERRE_AUTOMATICO", f"viaje #{id_v} · viaje ZAM {ped}", f"ZAM lo reporta {nuevo}")
+    poner_por_confirmar(dudosos, "ZAM")
+    return len(cerrados) - len(dudosos)
+
+
+# ---------------------------------------------------------- 🔔 por confirmar (TC decide)
+OPCIONES = {"✅ Terminó": "TERMINO", "↩️ Tiene devolución": "DEVOLUCION", "⏳ Sigue en curso": "SIGUE",
+            "❌ Se canceló": "CANCELADO"}
+
+
+def poner_por_confirmar(lista, fuente):
+    """lista = [(viaje_id, eco|None, motivo, ...)]. No repite ni revive lo ya resuelto/pospuesto."""
+    if not lista:
+        return 0
+    n = 0
+    with bd.conexion() as con:
+        for x in lista:
+            i, eco, motivo = x[0], x[1], x[2]
+            if eco is None:
+                f = con.execute("SELECT eco FROM viajes WHERE id = ?", [i]).fetchone()
+                eco = f[0] if f else None
+            n += con.execute("INSERT OR IGNORE INTO por_confirmar (viaje_id, eco, motivo, fuente, creado, estado) "
+                             "VALUES (?, ?, ?, ?, ?, 'PENDIENTE')", [i, eco, motivo, fuente, bd.AHORA_TXT()]).rowcount
+    return n
+
+
+def pendientes_confirmar():
+    """Viajes por confirmar que siguen abiertos (y que no estan pospuestos)."""
+    with bd.conexion() as con:
+        pc = pd.read_sql_query("SELECT * FROM por_confirmar WHERE estado = 'PENDIENTE' OR "
+                               "(estado = 'POSPUESTO' AND pospuesto_hasta <= ?)", con, params=[bd.AHORA_TXT()])
+    if pc.empty:
+        return pc
+    v = calculos.agregar_calculados(bd.leer_viajes("0000-01-01", "9999-12-31"))
+    v = v[v["id"].isin(pc["viaje_id"]) & ~v["estatus"].isin(ESTATUS_CERRADOS)]
+    t = pc.merge(v[["id", "eco", "tipo_operacion", "cliente", "origen", "destino", "cita_carga", "salida_carga",
+                    "cita_descarga", "llegada_descarga", "estatus"]],
+                 left_on="viaje_id", right_on="id", suffixes=("_pc", ""))
+    return t.sort_values(["cita_carga", "viaje_id"]).reset_index(drop=True)
+
+
+def resolver(viaje_id, accion, quien):
+    """accion: TERMINO | DEVOLUCION | SIGUE | CANCELADO."""
+    ahora = bd.AHORA_TXT()
+    usuario = quien.get("usuario") if isinstance(quien, dict) else str(quien)
+    with bd.conexion() as con:
+        if accion == "TERMINO":
+            con.execute("UPDATE viajes SET finalizado = 'SI', modificado = ? WHERE id = ?", [ahora, viaje_id])
+        elif accion == "CANCELADO":
+            con.execute("UPDATE viajes SET cancelado = 'SI', modificado = ? WHERE id = ?", [ahora, viaje_id])
+        elif accion == "DEVOLUCION":
+            con.execute("UPDATE viajes SET devolucion = COALESCE(NULLIF(devolucion, ''), 'SI'), modificado = ? "
+                        "WHERE id = ?", [ahora, viaje_id])
+        horas = {"SIGUE": 6, "DEVOLUCION": 12}.get(accion)
+        if horas:
+            hasta = (pd.Timestamp.now() + timedelta(hours=horas)).strftime("%Y-%m-%d %H:%M:%S")
+            con.execute("UPDATE por_confirmar SET estado = 'POSPUESTO', pospuesto_hasta = ?, resuelto_por = ?, "
+                        "resuelto = ? WHERE viaje_id = ?", [hasta, usuario, accion, viaje_id])
+        else:
+            con.execute("UPDATE por_confirmar SET estado = 'RESUELTO', resuelto_por = ?, resuelto = ? "
+                        "WHERE viaje_id = ?", [usuario, accion, viaje_id])
+    bd.bitacora(quien, f"CONFIRMADO_{accion}", f"viaje #{viaje_id}", "Respuesta de TC en 🔔 Por confirmar")
+    if accion == "DEVOLUCION":           # en Monitoreo la unidad se ve en devolucion (no disponible)
+        with bd.conexion() as con:
+            f = con.execute("SELECT eco FROM viajes WHERE id = ?", [viaje_id]).fetchone()
+        if f and f[0]:
+            bd.guardar_monitoreo({str(f[0]): {"estatus1": "↩️ DEVOLUCIÓN"}})
 
 
 def viaje_actual(abiertos, ahora=None):
