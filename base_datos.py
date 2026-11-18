@@ -130,6 +130,10 @@ def _crear_tablas():
         con.execute("CREATE TABLE IF NOT EXISTS operativos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, "
                     "usuario TEXT, eco TEXT, remolque TEXT, tipo TEXT, texto TEXT)")
         # viajes que el sistema cree terminados pero les faltan horas: TC confirma (pudo haber devolucion)
+        # viajes con varias paradas (La Comer: tiendas · Dliver: destinos)
+        con.execute("CREATE TABLE IF NOT EXISTS paradas (id INTEGER PRIMARY KEY AUTOINCREMENT, viaje_id INTEGER, "
+                    "orden INTEGER, lugar TEXT, cita TEXT, entrada TEXT, salida TEXT, notas TEXT, modificado TEXT)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_paradas_viaje ON paradas(viaje_id)")
         con.execute("CREATE TABLE IF NOT EXISTS por_confirmar (viaje_id INTEGER PRIMARY KEY, eco TEXT, motivo TEXT, "
                     "fuente TEXT, creado TEXT, estado TEXT, pospuesto_hasta TEXT, resuelto_por TEXT, resuelto TEXT)")
         _situacion_por_defecto(con)

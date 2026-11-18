@@ -105,6 +105,7 @@ ESTADIAS_INICIALES = {
 
 
 # ---- Monitoreo: cuando se enciende una alerta ----
+MON_HORAS_VACIO = 8                 # tras salir de su ultima descarga, la unidad se ve 🟤 VACÍO (regresando) estas horas
 MON_CITA_PROXIMA_HORAS = 2          # 🟠 falta menos de esto para la cita de descarga (o ya se pasó = 🔴)
 MON_SIN_REPORTAR_MIN = 60           # 🟠 la unidad lleva mas de esto sin mandar posicion
 MON_DETENIDA_TRANSITO_MIN = 60      # 🟠 unidad CARGADA en transito, detenida mas de este tiempo

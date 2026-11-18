@@ -16,7 +16,7 @@ import sys as _sys
 # con la version vieja. Aqui se recargan los que cambiaron (el TMS sigue funcionando, no hace falta reiniciar).
 _MODULOS_TMS = ["configuracion", "columnas", "nube", "base_datos", "calculos", "conciliacion", "reglas", "estilo",
                 "omnitracs", "zam", "estatus_clientes", "respaldos", "importar_plan", "usuarios_excel", "catalogos_excel",
-                "operativo", "coherencia"]
+                "operativo", "coherencia", "paradas"]
 
 
 def _recargar_modulos_cambiados():
@@ -48,6 +48,7 @@ import nube
 import omnitracs
 import operativo
 import coherencia
+import paradas
 import reglas
 import respaldos
 import usuarios_excel
@@ -1119,7 +1120,7 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
     pos = una_por_eco(posiciones_por_eco(abiertos["eco"].tolist()))
     pos = pos[["clave", "alias", "fecha", "ignicion", "velocidad", "latitud", "longitud", "en_mov"]]
     t = uni.merge(pos, on="clave", how="left")
-    cols_viaje = ["clave", "id", "pedido", "operador", "tipo_operacion", "cliente", "origen", "destino", "remolque_1",
+    cols_viaje = ["clave", "id", "pedido", "operador", "nomina", "tipo_operacion", "cliente", "origen", "destino", "remolque_1",
                   "estatus", "cita_carga", "llegada_carga", "cita_descarga", "llegada_descarga", "estadia"]
     t = t.merge(abiertos[cols_viaje].rename(columns={"estatus": "estatus_viaje", "operador": "operador_viaje"}),
                 on="clave", how="left")
@@ -1135,9 +1136,19 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
         return t
 
     # --- datos de apoyo
-    ops = bd.leer_catalogo("operadores").drop_duplicates("nombre").set_index("nombre")["telefono"].to_dict()
+    cat_ops = bd.leer_catalogo("operadores")
+    ops = cat_ops.drop_duplicates("nombre").set_index("nombre")["telefono"].to_dict()
+    tel_nom = {reglas._k(n): tl for n, tl in zip(cat_ops["nomina"], cat_ops["telefono"]) if reglas._k(n) and tl}
     t["operador"] = t["operador_viaje"].where(t["operador_viaje"].notna(), t["operador_habitual"])
-    t["telefono"] = t["operador"].map(lambda o: ops.get(o) if o else None)
+    t["telefono"] = [tel_nom.get(reglas._k(n)) or (ops.get(o) if o else None)            # por NÓMINA y si no, por nombre
+                     for n, o in zip(t["nomina"], t["operador"])]
+    # --- 🟤 VACÍO: unidad sin viaje que salió de su última descarga hace poco (va de regreso, aún no está libre)
+    recientes = bd.leer_viajes(dia - timedelta(days=3), dia + timedelta(days=1))
+    sal = pd.to_datetime(recientes["salida_descarga"], errors="coerce")
+    horas_vacio = getattr(cfg, "MON_HORAS_VACIO", 8)
+    rec = recientes[(sal >= ahora - pd.Timedelta(hours=horas_vacio)) & (sal <= ahora)]
+    vacio = {omnitracs.normalizar_alias(e): s for e, s in zip(rec["eco"], pd.to_datetime(rec["salida_descarga"]))
+             if e}
     t["cliente"] = t["cliente"].where(t["cliente"].notna(), t["tipo_operacion"])
 
     # --- ESTATUS 1 y ESTATUS 2
@@ -1146,6 +1157,8 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
             return ESTATUS1_SITUACION[f["situacion"]]
         if f["_viaje"]:
             return ESTATUS1.get(f["estatus_viaje"], f["estatus_viaje"] or "🟡 ASIGNADO")
+        if f["clave"] in vacio:
+            return "🟤 VACÍO"
         return ESTATUS1["DISPONIBLE"]
     t["estatus1"] = t.apply(estatus1, axis=1)
     t["_sin_pos"] = t["alias"].isna()
@@ -1158,6 +1171,8 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
         return "🅿️ RESGUARDO" if "APAG" in str(f["ignicion"]).upper() else "🔴 DETENIDA"
     t["estatus2"] = t.apply(estatus2, axis=1)
     t["estatus1_auto"], t["estatus2_auto"] = t["estatus1"], t["estatus2"]
+    res_par = paradas.resumen(t["id"].dropna().tolist())
+    t["paradas"] = t["id"].map(lambda i: res_par.get(int(i), "") if pd.notna(i) else "")
     manual = bd.leer_monitoreo_manual()                      # lo que TC puso a mano (vale unas horas)
     m1 = t["eco"].map(lambda e: manual.get(str(e), {}).get("estatus1"))
     m2 = t["eco"].map(lambda e: manual.get(str(e), {}).get("estatus2"))
@@ -1268,6 +1283,62 @@ def _aplicar_monitoreo(cambios, situaciones, resumen):
     st.toast(f"Guardado ({len(cambios)} unidades){extra}", icon="📝")
 
 
+def seccion_paradas(dia, tipo_sel, puede_editar):
+    """🛑 Paradas de un viaje (tiendas de La Comer, destinos de Dliver...). Conectado al Plan."""
+    st.divider()
+    st.markdown("#### 🛑 Paradas por viaje")
+    st.caption("Para rutas con varias tiendas o destinos. La **ENTRADA de la 1a parada** pasa como LLEGADA DESCARGA y la "
+               "**SALIDA de la última** como SALIDA DESCARGA: el viaje se cierra solo y la unidad queda 🟤 VACÍO.")
+    plan = cargar_plan(dia, True)
+    abiertos = plan[~plan["estatus"].isin(ESTATUS_CERRADOS)]
+    if tipo_sel != "(Todos)":
+        abiertos = abiertos[abiertos["tipo_operacion"] == tipo_sel]
+    if abiertos.empty:
+        st.info("No hay viajes abiertos en esta vista.")
+        return
+    abiertos = abiertos.sort_values(["cita_carga", "id"])
+    res = paradas.resumen(abiertos["id"].tolist())
+    etiqueta = {int(r["id"]): (f"#{int(r['id'])} · ECO {r['eco'] or '—'} · {r['cliente'] or r['tipo_operacion'] or ''} · "
+                               f"{r['destino'] or ''}" + (f" · {pd.Timestamp(r['cita_carga']):%d/%m %H:%M}"
+                                                         if pd.notna(r['cita_carga']) else "")
+                               + (f"  [{res[int(r['id'])]}]" if int(r["id"]) in res else ""))
+                for _, r in abiertos.iterrows()}
+    vid = st.selectbox("Viaje", list(etiqueta), format_func=etiqueta.get, index=None,
+                       placeholder="Elige el viaje (escribe el ECO o la tienda para buscar)", key="par_viaje")
+    if vid is None:
+        return
+    actuales = paradas.leer(vid)
+    if actuales.empty:
+        actuales = pd.DataFrame({"orden": [1], "lugar": [None], "cita": [pd.NaT], "entrada": [pd.NaT],
+                                 "salida": [pd.NaT], "notas": [None]})
+    lugares = sorted(set(bd.opciones_catalogo("destinos")) | set(actuales["lugar"].dropna().astype(str)))
+    ed = st.data_editor(actuales, num_rows="dynamic", hide_index=True, key=f"par_ed_{vid}_{st.session_state.get('par_ver', 0)}",
+                        disabled=not puede_editar,
+                        column_config={
+                            "orden": st.column_config.NumberColumn("#", width="small", help="Orden de la parada"),
+                            "lugar": st.column_config.SelectboxColumn("TIENDA / DESTINO", options=lugares, width="large",
+                                                                      help="Del catálogo de Destinos"),
+                            "cita": st.column_config.DatetimeColumn("CITA", format="DD/MM HH:mm"),
+                            "entrada": st.column_config.DatetimeColumn("ENTRADA", format="DD/MM HH:mm"),
+                            "salida": st.column_config.DatetimeColumn("SALIDA", format="DD/MM HH:mm"),
+                            "notas": st.column_config.TextColumn("NOTAS", width="medium")})
+    con_sal = ed.dropna(subset=["lugar"])
+    hechas = int(con_sal["salida"].notna().sum()) if len(con_sal) else 0
+    tiempos = [f"{r['lugar']}: {_hm((r['salida'] - r['entrada']).total_seconds() / 60)}"
+               for _, r in con_sal.iterrows() if pd.notna(r["entrada"]) and pd.notna(r["salida"])]
+    st.caption(f"Realizadas: **{hechas}/{len(con_sal)}**" + (" · Tiempo en cada parada: " + " · ".join(tiempos) if tiempos else ""))
+    if not puede_editar:
+        st.caption("🔒 Solo Torre de Control (TC) captura las paradas.")
+    elif st.button("💾 Guardar paradas", type="primary", key="par_guardar"):
+        n, cambios = paradas.guardar(vid, ed, USR)
+        coherencia.ejecutar(forzar=True, quien=USR)
+        st.session_state.par_ver = st.session_state.get("par_ver", 0) + 1
+        st.session_state.pop("mon_cache", None)
+        st.toast(f"{n} parada(s) guardadas" + (" · el Plan se actualizó (" + ", ".join(cambios) + ")" if cambios else ""),
+                 icon="🛑")
+        st.rerun()
+
+
 def panel_por_confirmar(tipo_sel, puede_editar):
     """🔔 Viajes que el sistema cree terminados pero sin horas: TC dice qué pasó (pudo haber devolución)."""
     pc = coherencia.pendientes_confirmar()
@@ -1372,7 +1443,7 @@ def panel_monitoreo(dia, tipo_sel, puede_editar):
         elif filtro.startswith("⚪"):
             datos = tabla[tabla["estatus1"] == ESTATUS1["DISPONIBLE"]]
 
-        orden = ["alerta", "eco", "estatus1", "estatus2", "operador", "telefono", "cliente", "pedido", "origen", "destino",
+        orden = ["alerta", "eco", "estatus1", "estatus2", "operador", "telefono", "cliente", "pedido", "origen", "destino", "paradas",
                  "remolque_1", "velocidad", "ignicion", "reporto", "detenida_desde", "cita_carga", "para_carga",
                  "cita_descarga", "para_descarga", "estadia", "mapa", "observaciones"]
         st.caption(f"{len(datos)} unidades en esta vista. Ordenadas: primero las que necesitan atención. "
@@ -1389,6 +1460,7 @@ def panel_monitoreo(dia, tipo_sel, puede_editar):
                   options=list(dict.fromkeys(OPCIONES_ESTATUS2 + datos["estatus2"].dropna().tolist()))),
               "operador": "OPERADOR", "telefono": "TELÉFONO",
               "cliente": "CLIENTE", "pedido": "PEDIDO", "origen": "ORIGEN", "destino": "DESTINO",
+              "paradas": st.column_config.TextColumn("PARADAS", help="Realizadas / total y en qué parada va (ver 🛑 Paradas abajo)"),
               "remolque_1": "REMOLQUE", "velocidad": st.column_config.NumberColumn("VEL.", format="%d", width="small"),
               "ignicion": "IGNICIÓN", "reporto": "REPORTÓ", "detenida_desde": "DETENIDA DESDE",
               "cita_carga": st.column_config.DatetimeColumn("CITA CARGA", format="DD/MM HH:mm"),
@@ -1513,6 +1585,7 @@ if "mon" in T:
         except Exception as e:
             st.error(f"No se pudo: {e}")
     panel_monitoreo(dia, tipo_sel, perm["monitoreo_editar"])
+    seccion_paradas(dia, tipo_sel, perm["monitoreo_editar"])
 
 
 # ================================================================== ESTATUS PARA CLIENTES (TC)
