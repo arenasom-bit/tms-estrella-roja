@@ -16,7 +16,8 @@ import sys as _sys
 # con la version vieja. Aqui se recargan los que cambiaron (el TMS sigue funcionando, no hace falta reiniciar).
 _MODULOS_TMS = ["configuracion", "columnas", "nube", "base_datos", "calculos", "conciliacion", "reglas", "estilo",
                 "omnitracs", "zam", "estatus_clientes", "respaldos", "importar_plan", "usuarios_excel", "catalogos_excel",
-                "operativo", "coherencia", "paradas", "zam_excel"]
+                "operativo", "coherencia", "paradas", "zam_excel",
+                "dyr", "flota", "mantenimiento"]
 
 
 def _recargar_modulos_cambiados():
@@ -50,6 +51,9 @@ import operativo
 import coherencia
 import paradas
 import zam_excel
+import dyr
+import flota
+import mantenimiento
 import reglas
 import respaldos
 import usuarios_excel
@@ -516,7 +520,7 @@ else:
     with st.sidebar:
         st.divider()
         st.caption(estado_zam())
-        if not perm["editar"]:
+        if not perm["editar"] and rol not in ("ADF", "MTTO"):
             st.caption("🔒 Perfil de solo consulta: puedes ver el Plan del día y exportar.")
 
 estilo.encabezado("Plan de carga TMS", f"Operación del {dia:%d/%m/%Y} · vista {rol}")
@@ -526,7 +530,7 @@ if st.session_state.get("mensaje"):
     st.success(st.session_state.pop("mensaje"), icon="🚛")
 
 # ------------------------------------------------------------------ pestañas (cada perfil ve solo las suyas)
-claves_tabs = perm["pestanas"] + (["seg"] if es_master else [])
+claves_tabs = perm["pestanas"] + (["dyr"] if es_master and "dyr" not in perm["pestanas"] else []) + (["seg"] if es_master else [])
 try:                                     # key: la pagina recuerda en que pestaña estabas (tras guardar, avisos, etc.)
     _pestanas = st.tabs([PESTANAS[k] for k in claves_tabs], key=f"pestanas_{rol}", on_change="rerun")
 except TypeError:                        # Streamlit viejo (sin key en tabs)
@@ -736,8 +740,9 @@ if "plan" in T:
     flota["_k"] = flota["eco"].astype(str).str.strip()
     zam_activos = reglas.Contexto().ecos_activos_zam()          # ECO con viaje 'open' en ZAM
     flota_zam = flota["_k"].str.upper().isin(zam_activos)
+    en_dyr = flota["_k"].str.upper().isin(set(dyr.bloqueados()["eco"]))           # devolución DYR sin liberar
     libres = flota[(flota["situacion"] == "OPERANDO") & (~flota["_k"].isin(ecos_ocupados))
-                   & (~flota_zam)].copy()
+                   & (~flota_zam) & (~en_dyr)].copy()
     libres["motivo"] = libres["_k"].map(lambda k: "Terminó o canceló su viaje" if k in ecos_en_plan
                                         else "Sin viaje en el plan")
     disp_plan = int((libres["motivo"] != "Sin viaje en el plan").sum())
@@ -938,11 +943,21 @@ if "plan" in T:
               "El ESTATUS se calcula solo, pero puedes cambiarlo a mano; si borras tu valor, vuelve al automático. "
               "Nada se guarda hasta que presiones el botón.")
 
+        avisos_mtto = []
+        if mantenimiento.proximos():                          # 🔧 unidades/cajas con mantenimiento próximo
+            try:
+                avisos_mtto = mantenimiento.avisos(reglas.propuestas_desde_editor(df_tab, editado))
+            except Exception:
+                avisos_mtto = []
+        for a in avisos_mtto:
+            st.warning("🔧 " + a)
         guardar_abajo = st.button("💾 Guardar cambios", type="primary", key="guardar_abajo")
-        if guardar_arriba or guardar_abajo:
+        p_guardar = {"base": df_tab, "editado": editado, "dia": dia, "tipo": tipo_sel, "claves": claves_ed}
+        if (guardar_arriba or guardar_abajo) and avisos_mtto:
+            st.session_state.mtto_dialogo = {"avisos": avisos_mtto, "p": p_guardar}   # primero: Aceptar en la ventana
+        elif guardar_arriba or guardar_abajo:
             with st.spinner("Revisando unidades, operadores y remolques..."):
-                ok, res = guardar_plan_pendiente({"base": df_tab, "editado": editado, "dia": dia, "tipo": tipo_sel,
-                                                  "claves": claves_ed}, USR)
+                ok, res = guardar_plan_pendiente(p_guardar, USR)
             if not ok:
                 st.error("**No se guardó nada.** Corrige estas asignaciones (tus cambios siguen en la tabla):\n\n"
                          + "\n".join(f"- {e}" for e in res))
@@ -953,6 +968,33 @@ if "plan" in T:
                     + (f" · 🏁 {n_auto} viaje(s) completo(s) finalizado(s) solos: su unidad y operador ya están disponibles"
                        if n_auto else ""))
                 st.rerun()
+
+@st.dialog("🔧 Mantenimiento próximo", dismissible=False)
+def ventana_mantenimiento():
+    d = st.session_state.mtto_dialogo
+    for a in d["avisos"]:
+        st.warning(a)
+    c1, c2 = st.columns(2)
+    if c1.button("✅ Aceptar y asignar", type="primary", key="mtto_aceptar"):
+        ok, res = guardar_plan_pendiente(d["p"], USR)
+        st.session_state.pop("mtto_dialogo", None)
+        if ok:
+            bd.bitacora(USR, "MTTO_AVISO_ACEPTADO", "plan", " | ".join(d["avisos"])[:3900])
+            r, n_auto = res
+            st.session_state.mensaje = f"Guardado ✅  Nuevos: {r['nuevos']} · Modificados: {r['cambios']} · Borrados: {r['borrados']}"
+        else:
+            st.session_state.plan_errores = res
+        st.rerun()
+    if c2.button("Regresar sin guardar", key="mtto_regresar"):
+        st.session_state.pop("mtto_dialogo", None)
+        st.rerun()
+
+
+if "plan" in T and st.session_state.get("mtto_dialogo") and abrir_dialogo():
+    ventana_mantenimiento()
+if st.session_state.get("plan_errores"):
+    st.error("**No se guardó nada.** Corrige estas asignaciones:\n\n" + "\n".join(f"- {e}" for e in st.session_state.pop("plan_errores")))
+
 
 # ================================================================== NUEVO PEDIDO (solo ATC)
 def _link_automatico(lado, clave_lugar, clave_link):
@@ -1044,7 +1086,7 @@ ESTATUS1_EXTRA = ["🟤 VACÍO", "↩️ DEVOLUCIÓN", "🤝 PRÉSTAMO"]        
 AUTOMATICO = "🔄 AUTOMÁTICO"
 # Estos estatus viven en el catálogo de Vehículos (SITUACIÓN): al elegirlos allá también cambia, y la unidad no se puede asignar
 ESTATUS1_SITUACION = {"CORRALON": "🚫 CORRALÓN", "TALLER": "🔧 TALLER", "SINIESTRO": "🚨 SINIESTRO",
-                      "NO DISPONIBLE": "⛔ NO DISPONIBLE"}
+                      "NO DISPONIBLE": "⛔ NO DISPONIBLE", "INACTIVA": "⚫ INACTIVA"}
 SITUACION_DE_TEXTO = {v: k for k, v in ESTATUS1_SITUACION.items()}
 OPCIONES_ESTATUS1 = [AUTOMATICO] + list(ESTATUS1.values()) + ESTATUS1_EXTRA + list(ESTATUS1_SITUACION.values())
 OPCIONES_ESTATUS2 = [AUTOMATICO, "🟢 EN TRÁNSITO", "🔴 DETENIDA", "🅿️ RESGUARDO"]
@@ -1153,9 +1195,14 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
     t["cliente"] = t["cliente"].where(t["cliente"].notna(), t["tipo_operacion"])
 
     # --- ESTATUS 1 y ESTATUS 2
+    blk = dyr.bloqueados()
+    dyr_eco = {omnitracs.normalizar_alias(e): fo for e, fo in blk["eco"].items()}
+
     def estatus1(f):
         if f["situacion"] in ESTATUS1_SITUACION:
             return ESTATUS1_SITUACION[f["situacion"]]
+        if f["clave"] in dyr_eco and not f["_viaje"]:
+            return "↩️ DEVOLUCIÓN"
         if f["_viaje"]:
             return ESTATUS1.get(f["estatus_viaje"], f["estatus_viaje"] or "🟡 ASIGNADO")
         if f["clave"] in vacio:
@@ -1201,6 +1248,10 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
     t["_por_confirmar"] = t["id"].map(lambda i: pd.notna(i) and int(i) in ids_pc)
     al = t.apply(lambda f: _alerta(f, ahora), axis=1)
     t["_prio"], t["alerta"] = [a[0] for a in al], [a[1] for a in al]
+    en_dyr = t["clave"].isin(set(dyr_eco))
+    t.loc[en_dyr, "alerta"] = t.loc[en_dyr, "clave"].map(lambda c: f"↩️ Devolución DYR sin liberar (folio {dyr_eco[c]})") \
+        + t.loc[en_dyr, "alerta"].map(lambda a: f" · {a}" if a and "En tiempo" not in a else "")
+    t.loc[en_dyr, "_prio"] = 0
 
     # --- mapa / observaciones
     t["mapa"] = [f"https://www.google.com/maps?q={la},{lo}" if pd.notna(la) and pd.notna(lo) else None
@@ -1454,8 +1505,10 @@ def panel_monitoreo(dia, tipo_sel, puede_editar):
               "eco": st.column_config.TextColumn("ECO", width="small"),
               "estatus1": st.column_config.SelectboxColumn(
                   "ESTATUS 1" + (" ✏️" if puede_editar else ""), width="medium",
-                  options=list(dict.fromkeys(OPCIONES_ESTATUS1 + datos["estatus1"].dropna().tolist())),
-                  help="Elige 🔄 AUTOMÁTICO para que el TMS lo calcule solo. CORRALÓN también pone la unidad en corralón en el catálogo."),
+                  options=list(dict.fromkeys([o for o in OPCIONES_ESTATUS1 if es_master or o not in ESTATUS1_SITUACION.values()]
+                                             + datos["estatus1"].dropna().tolist())),
+                  help="Elige 🔄 AUTOMÁTICO para que el TMS lo calcule solo. CORRALÓN, TALLER, SINIESTRO e INACTIVA "
+                       "los pone el Admin de Flota / Mantenimiento."),
               "estatus2": st.column_config.SelectboxColumn(
                   "ESTATUS 2" + (" ✏️" if puede_editar else ""), width="medium",
                   options=list(dict.fromkeys(OPCIONES_ESTATUS2 + datos["estatus2"].dropna().tolist()))),
@@ -1964,12 +2017,14 @@ if "cat" in T:
             "eco": "ECO",
             "operador": st.column_config.SelectboxColumn(
                 "OPERADOR HABITUAL", options=bd.opciones_catalogo("operadores", "nombre")),
-            "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES),
+            "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES, disabled=not es_master,
+                                                          help="La cambia el Admin de Flota (o Mantenimiento: TALLER)"),
             "placas": "PLACAS", "vin": "VIN", "marca": "MARCA", "modelo": "MODELO", "anio": "AÑO"})
     with sub[1]:
         st.caption("Solo los remolques en SITUACIÓN = OPERANDO se pueden asignar a un viaje.")
         editor_catalogo("remolques", {"remolque": "REMOLQUE", "tipo": "TIPO", "placas": "PLACAS",
-                                      "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES), "vin": "VIN"})
+                                      "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES,
+                                                                                    disabled=not es_master), "vin": "VIN"})
     with sub[2]:
         editor_catalogo("operadores", {"nomina": "NÓMINA", "nombre": "NOMBRE", "telefono": "TELÉFONO"})
     with sub[3]:
@@ -2028,6 +2083,199 @@ if "cat" in T:
                 "destino_id": "DESTINO (ID)", "llegada_plan": "LLEGADA PLANEADA"}), hide_index=True)
 
 # ================================================================== EXPORTAR
+# ================================================================== DYR: devoluciones y rechazos (OPS y MASTER)
+if "dyr" in T:
+  with T["dyr"]:
+    st.subheader("↩️ DYR · Devoluciones y rechazos")
+    st.caption("OPS escribe el **FOLIO CLIENTE** y los datos de la devolución; lo **formulado** (ECO, remolque, operador, "
+               "origen, destino, cita, salida de descarga, factura, CP y descarga real) lo trae solo el TMS del Plan de carga. "
+               "**Mesa de control** y **ESTATUS** solo el MASTER. Mientras el MASTER no la ponga en **CERRADO**, la unidad y la "
+               "caja de la devolución **no se pueden asignar ni quedan disponibles**.")
+    datos_dyr = dyr.leer()
+    tot = len(datos_dyr)
+    cuenta = datos_dyr["estatus"].fillna("").str.upper().value_counts()
+    m = st.columns(4)
+    m[0].metric("TOTALES", tot)
+    for col, e in zip(m[1:], ["CERRADO", "PROCESO", "VALIDACION"]):
+        n = int(cuenta.get(e, 0))
+        col.metric(e.capitalize(), n, f"{n / tot:.0%}" if tot else None, delta_color="off")
+    f1, f2 = st.columns([1, 2])
+    filtro_dyr = f1.selectbox("Ver", ["Abiertas (sin liberar)", "Todas", "CERRADO", "PROCESO", "VALIDACION"], key="dyr_filtro")
+    buscar_dyr = f2.text_input("Buscar (folio, ECO, caja, operador...)", key="dyr_buscar")
+    vista_dyr = datos_dyr
+    if filtro_dyr == "Abiertas (sin liberar)":
+        vista_dyr = vista_dyr[vista_dyr["estatus"].fillna("").str.upper() != "CERRADO"]
+    elif filtro_dyr != "Todas":
+        vista_dyr = vista_dyr[vista_dyr["estatus"].fillna("").str.upper() == filtro_dyr]
+    if buscar_dyr.strip():
+        q = buscar_dyr.strip().upper()
+        vista_dyr = vista_dyr[vista_dyr.astype(str).apply(lambda r: q in " ".join(r).upper(), axis=1)]
+    puede_master = es_master
+    cfg_dyr = {"id": None}
+    for c, titulo, grupo in dyr.CAMPOS:
+        marca = "" if grupo == "OPS" else (" 🔒" if grupo == "MESA" else " ⚙️")
+        bloq = not (puede_master or grupo == "OPS")
+        if c in dyr.FECHAS:
+            cfg_dyr[c] = st.column_config.DatetimeColumn(titulo + marca, format="DD/MM/YY HH:mm", disabled=bloq)
+        elif c == "motivo":
+            cfg_dyr[c] = st.column_config.SelectboxColumn(titulo + marca, options=dyr.MOTIVOS, disabled=bloq)
+        elif c == "estatus":
+            cfg_dyr[c] = st.column_config.SelectboxColumn(titulo + marca, options=dyr.ESTATUS, disabled=bloq,
+                                                          help="CERRADO = el MASTER libera la unidad y la caja")
+        elif c == "estatus_peplink":
+            cfg_dyr[c] = st.column_config.SelectboxColumn(titulo + marca, options=dyr.ESTATUS_PEPLINK, disabled=bloq)
+        elif c == "estatus_entrega":
+            cfg_dyr[c] = st.column_config.SelectboxColumn(titulo + marca, options=dyr.ESTATUS_ENTREGA, disabled=bloq)
+        elif c == "entrada_patio":
+            cfg_dyr[c] = st.column_config.SelectboxColumn(titulo + marca, options=["SI", "NO"], disabled=bloq)
+        else:
+            cfg_dyr[c] = st.column_config.TextColumn(titulo + marca, disabled=bloq)
+    st.caption("⚙️ = formulado (lo llena el TMS; solo MASTER lo corrige) · 🔒 = mesa de control (solo MASTER). "
+               "Para agregar: escribe el FOLIO CLIENTE en la fila vacía del final.")
+    ed_dyr = st.data_editor(vista_dyr, column_config=cfg_dyr, hide_index=True, num_rows="dynamic",
+                            key=f"dyr_ed_{st.session_state.get('dyr_ver', 0)}_{filtro_dyr}_{buscar_dyr}", height=420)
+    if st.button("💾 Guardar DYR", type="primary", key="dyr_guardar"):
+        n, c, b, avisos_d = dyr.guardar(vista_dyr, ed_dyr, USR, puede_master)
+        for a in avisos_d:
+            st.warning(a)
+        st.session_state.dyr_ver = st.session_state.get("dyr_ver", 0) + 1
+        st.toast(f"DYR guardado: {n} nuevos · {c} cambiados · {b} borrados", icon="↩️")
+        if not avisos_d:
+            st.rerun()
+    if puede_master:
+        with st.expander("📥 Cargar el Excel DYR PEPSICO (solo MASTER)"):
+            arch_dyr = st.file_uploader("Excel DYR", type=["xlsx"], key="dyr_excel")
+            if arch_dyr is not None and st.button("Cargar DYR", key="dyr_cargar"):
+                n, c = dyr.importar_excel(arch_dyr, USR)
+                st.session_state.dyr_ver = st.session_state.get("dyr_ver", 0) + 1
+                st.session_state.mensaje = f"DYR cargado ✅  {n} nuevos · {c} completados"
+                st.rerun()
+
+    # ---------------- ficha (como AG6:AH13 del Excel): solo se escribe el folio
+    st.divider()
+    st.markdown("#### 🧾 Ficha de devolución")
+    st.caption("Escribe **únicamente el FOLIO CLIENTE** y se arma la ficha para tomar captura.")
+    folios = [f for f in datos_dyr["folio_cliente"].dropna().astype(str).tolist() if f]
+    folio_f = st.selectbox("FOLIO CLIENTE", list(reversed(folios)), index=None, placeholder="Escribe o elige el folio",
+                           key="dyr_ficha_folio")
+    if folio_f:
+        filas_f = dyr.ficha(folio_f)
+        if filas_f is None:
+            st.error("NO ENCONTRADO")
+        else:
+            estilo.ficha(filas_f, "FOLIO CLIENTE", pagina=False)
+
+
+# ================================================================== FLOTA (Admin de Flota) y MANTENIMIENTO
+def panel_flota(perfil):
+    """ADF: placas y situación (OPERANDO/CORRALÓN/SINIESTRO/INACTIVA) · MTTO: TALLER ↔ OPERANDO y mantenimientos."""
+    vista_f = st.radio("Ver", ["🚚 Tractos", "🛞 Cajas"], horizontal=True, key=f"flota_vista_{perfil}",
+                       label_visibility="collapsed")
+    tipo_f = "UNIDAD" if vista_f.startswith("🚚") else "REMOLQUE"
+    df_f = flota.tabla(tipo_f)
+    if df_f.empty:
+        st.info("No hay registros en el catálogo.")
+        return
+    sit = df_f["situacion"].fillna("OPERANDO").str.upper().value_counts()
+    k = st.columns(5)
+    k[0].metric("Total", len(df_f))
+    for col, s in zip(k[1:], ["OPERANDO", "TALLER", "CORRALON", "INACTIVA"]):
+        col.metric(s.capitalize(), int(sit.get(s, 0)))
+    buscar_f = st.text_input("Buscar ECO / caja / placas / operador", key=f"flota_buscar_{perfil}_{tipo_f}")
+    if buscar_f.strip():
+        q = buscar_f.strip().upper()
+        df_f = df_f[df_f.astype(str).apply(lambda r: q in " ".join(r).upper(), axis=1)]
+    opciones = flota.SITUACIONES_MTTO if perfil == "MTTO" else flota.SITUACIONES_ADF if perfil == "ADF" else SITUACIONES
+    cols = ["clave", "placas", "situacion", "hace", "lugar", "mapa", "ultimo_operador", "telefono", "ultimo_cliente",
+            "ultima_asignacion", "mtto"]
+    ed_f = st.data_editor(
+        df_f[cols], hide_index=True, key=f"flota_ed_{perfil}_{tipo_f}_{st.session_state.get('flota_ver', 0)}", height=430,
+        disabled=[c for c in cols if c not in ("placas", "situacion") or (c == "placas" and perfil == "MTTO")],
+        column_config={
+            "clave": st.column_config.TextColumn("ECO" if tipo_f == "UNIDAD" else "CAJA", width="small"),
+            "placas": st.column_config.TextColumn("PLACAS" + (" ✏️" if perfil != "MTTO" else "")),
+            "situacion": st.column_config.SelectboxColumn(
+                "SITUACIÓN ✏️", options=list(dict.fromkeys(opciones + df_f["situacion"].dropna().tolist())),
+                help=("Mantenimiento: TALLER → OPERANDO" if perfil == "MTTO" else
+                      "OPERANDO (disponible), CORRALÓN, SINIESTRO o INACTIVA. TALLER lo libera Mantenimiento.")),
+            "hace": "ACTUALIZÓ", "lugar": "UBICACIÓN",
+            "mapa": st.column_config.LinkColumn("MAPA", display_text="🗺️ Ver", width="small"),
+            "ultimo_operador": "ÚLTIMO OPERADOR", "telefono": "TELÉFONO", "ultimo_cliente": "ÚLTIMO CLIENTE",
+            "ultima_asignacion": st.column_config.DatetimeColumn("ÚLTIMA ASIGNACIÓN", format="DD/MM/YY HH:mm"),
+            "mtto": st.column_config.DateColumn("PRÓX. MANTENIMIENTO", format="DD/MM/YYYY")})
+    if st.button("💾 Guardar cambios", type="primary", key=f"flota_guardar_{perfil}_{tipo_f}"):
+        orig = df_f[cols].copy()
+        cambios_f, errores_f = flota.guardar(orig, ed_f, tipo_f, perfil, USR)
+        for e in errores_f:
+            st.error(e)
+        if cambios_f:
+            st.session_state.flota_ver = st.session_state.get("flota_ver", 0) + 1
+            st.toast(f"{len(cambios_f)} cambio(s) guardado(s)", icon="🚛")
+            if not errores_f:
+                st.rerun()
+    pts = df_f.dropna(subset=["lat", "lon"])
+    if len(pts):
+        colores = {"OPERANDO": [34, 160, 80, 230], "TALLER": [245, 130, 32, 230], "CORRALON": [214, 40, 40, 230],
+                   "SINIESTRO": [214, 40, 40, 230], "INACTIVA": [110, 120, 130, 220]}
+        mp = pd.DataFrame({"alias": pts["clave"].astype(str), "latitud": pts["lat"], "longitud": pts["lon"],
+                           "color": pts["situacion"].fillna("OPERANDO").str.upper().map(lambda s: colores.get(s, [0, 93, 180, 230])),
+                           "tip": pts["clave"].astype(str) + "\n" + pts["situacion"].fillna("") + "\n" + pts["hace"]
+                                  + "\n" + pts["ultimo_operador"].fillna("") + "\n" + pts["ultimo_cliente"].fillna("")})
+        st.caption("🗺️ 🟢 operando · 🟠 taller · 🔴 corralón/siniestro · ⚫ inactiva")
+        dibujar_mapa(mp, st.checkbox("Mostrar ECO en el mapa", value=True, key=f"flota_alias_{perfil}_{tipo_f}"))
+
+
+if "flota" in T:
+  with T["flota"]:
+    st.subheader("🚛 Flota · Admin de Flota")
+    st.caption("Dónde está cada tracto y caja, hace cuánto actualiza, su último operador (con teléfono) y su último cliente. "
+               "Aquí se cambian **placas** y la **situación**: OPERANDO (disponible), CORRALÓN, SINIESTRO o INACTIVA.")
+    panel_flota("ADF" if not es_master or rol == "ADF" else "MASTER")
+
+if "mtto" in T:
+  with T["mtto"]:
+    st.subheader("🔧 Mantenimiento")
+    st.caption("Pasa unidades y cajas de **TALLER a OPERANDO** y programa mantenimientos. Cuando OPS asigne una unidad o "
+               "caja con mantenimiento próximo, el TMS le avisa antes de guardar.")
+    panel_flota("MTTO")
+    st.divider()
+    st.markdown("#### 📅 Mantenimientos programados")
+    with st.form("mtto_nuevo", clear_on_submit=True):
+        c1, c2, c3 = st.columns([1, 1.2, 1])
+        tipo_m = c1.selectbox("Tipo", ["UNIDAD", "REMOLQUE"], format_func=lambda x: "Tracto" if x == "UNIDAD" else "Caja")
+        claves_m = bd.opciones_catalogo("unidades") + bd.opciones_catalogo("remolques")
+        clave_m = c2.selectbox("ECO / caja", claves_m, index=None, placeholder="Escribe o elige")
+        fecha_m = c3.date_input("Fecha", value=date.today() + timedelta(days=7), format="DD/MM/YYYY")
+        notas_m = st.text_input("Notas (servicio, taller...)")
+        if st.form_submit_button("📅 Programar mantenimiento", type="primary"):
+            if not clave_m:
+                st.error("Elige el ECO o la caja.")
+            else:
+                tipo_real = "REMOLQUE" if clave_m in bd.opciones_catalogo("remolques") and clave_m not in bd.opciones_catalogo("unidades") else tipo_m
+                mantenimiento.programar(tipo_real, clave_m, fecha_m, notas_m, USR)
+                st.toast(f"Mantenimiento de {clave_m} programado para {fecha_m:%d/%m/%Y}", icon="📅")
+    pend_m = mantenimiento.leer(solo_pendientes=True)
+    if pend_m.empty:
+        st.caption("No hay mantenimientos pendientes.")
+    else:
+        hoy_ts = pd.Timestamp(date.today())
+        vm = pd.DataFrame({"HECHO": [False] * len(pend_m), "#": pend_m["id"], "TIPO": pend_m["tipo"].map({"UNIDAD": "Tracto", "REMOLQUE": "Caja"}),
+                           "ECO / CAJA": pend_m["clave"], "FECHA": pend_m["fecha"].dt.date, "NOTAS": pend_m["notas"].fillna(""),
+                           "CUÁNDO": pend_m["fecha"].map(lambda f: "⚠️ vencido" if f < hoy_ts else
+                                                         ("🟠 esta semana" if f <= hoy_ts + pd.Timedelta(days=7) else ""))})
+        ed_m = st.data_editor(vm, hide_index=True, key=f"mtto_ed_{st.session_state.get('mtto_ver', 0)}",
+                              disabled=[c for c in vm.columns if c != "HECHO"],
+                              column_config={"HECHO": st.column_config.CheckboxColumn("✅ REALIZADO",
+                                                                                      help="Marca y guarda: ya no saldrá la alerta"),
+                                             "FECHA": st.column_config.DateColumn(format="DD/MM/YYYY")})
+        hechos = ed_m[ed_m["HECHO"]]
+        if st.button(f"✅ Marcar realizado ({len(hechos)})", disabled=hechos.empty, key="mtto_realizado"):
+            for mid in hechos["#"]:
+                mantenimiento.realizado(int(mid), USR)
+            st.session_state.mtto_ver = st.session_state.get("mtto_ver", 0) + 1
+            st.rerun()
+
+
 if "exp" in T:
   with T["exp"]:
     st.subheader("Exportar a CSV")

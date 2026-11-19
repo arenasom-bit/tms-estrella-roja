@@ -130,6 +130,9 @@ def _crear_tablas():
         con.execute("CREATE TABLE IF NOT EXISTS operativos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, "
                     "usuario TEXT, eco TEXT, remolque TEXT, tipo TEXT, texto TEXT)")
         # viajes que el sistema cree terminados pero les faltan horas: TC confirma (pudo haber devolucion)
+        import dyr as _dyr, mantenimiento as _mtto          # devoluciones (DYR) y mantenimientos programados
+        _dyr.crear_tabla(con)
+        _mtto.crear_tabla(con)
         # viajes con varias paradas (La Comer: tiendas · Dliver: destinos)
         con.execute("CREATE TABLE IF NOT EXISTS paradas (id INTEGER PRIMARY KEY AUTOINCREMENT, viaje_id INTEGER, "
                     "orden INTEGER, lugar TEXT, cita TEXT, entrada TEXT, salida TEXT, notas TEXT, modificado TEXT)")
@@ -689,7 +692,7 @@ def aprender_link(lado, nombre, link):
 # ---------------------------------------------------------- usuarios y acceso
 # Los usuarios MASTER (los unicos que crean usuarios). Las contrasenas NO estan en el codigo: solo su huella (hash).
 USUARIOS_MASTER = [('JLMAR', 'Jose Luis Mar Sierra', 'pbkdf2$200000$466e55827687abe0c0f2a921607d3d6e$e44c39775fce50c07fad98910f884ad8002cf002c826e2a677bd4dfc34f59209'), ('OAARE', 'Omar Ali Arenas', 'pbkdf2$200000$246b2ec12ad9d1901498c544bf479839$4675fb9590dcb4404aea17a6e96ed351ca15fed8baef4acb150ad8793e2dddbc')]
-PERFILES_CREABLES = ["TC", "OPS", "ATC", "TODOS"]        # un MASTER solo puede crear estos perfiles
+PERFILES_CREABLES = ["TC", "OPS", "ATC", "TODOS", "ADF", "MTTO", "MASTER"]   # solo un MASTER crea usuarios (y otros MASTER)
 
 
 def hash_pwd(pwd, sal=None, iteraciones=200_000):
@@ -751,13 +754,13 @@ def listar_usuarios():
 
 
 def crear_usuario(quien, usuario, nombre, pwd, perfil):
-    """Solo MASTER. Perfiles permitidos: TC, OPS, ATC, TODOS. Devuelve (ok, mensaje)."""
+    """Solo MASTER (y solo un MASTER puede crear otro MASTER). Devuelve (ok, mensaje)."""
     import re
     if not isinstance(quien, dict) or quien.get("perfil") != "MASTER":
         return False, "Solo un usuario MASTER puede crear usuarios."
     usuario, nombre = (usuario or "").strip().upper(), (nombre or "").strip()
     if perfil not in PERFILES_CREABLES:
-        return False, "Perfil no permitido. Elige TC, OPS, ATC o TODOS."
+        return False, "Perfil no permitido. Elige " + ", ".join(PERFILES_CREABLES) + "."
     if not re.fullmatch(r"[A-Z0-9_.]{3,20}", usuario):
         return False, "El usuario debe tener de 3 a 20 letras o números (sin espacios)."
     if not nombre:

@@ -54,6 +54,9 @@ class Contexto:
 
         # viajes 'open' de la vista ZAM
         self.zam = bd.leer_zam()
+        # devoluciones (DYR) sin liberar por el MASTER: su unidad y su caja no se pueden asignar
+        import dyr
+        self.dyr = dyr.bloqueados()
 
     # ---------------------------------------------------- quien ocupa que
     def _viaje_tms(self, columna, llave, excluir_id):
@@ -92,7 +95,7 @@ class Contexto:
     def eco_asignable(self, eco):
         k = _k(eco)
         return (self.situacion.get(k) == "OPERANDO" and self._viaje_tms("eco", k, None) is None
-                and self._viaje_zam("eco", k) is None)
+                and self._viaje_zam("eco", k) is None and k not in self.dyr["eco"])
 
     def operador_asignable(self, nombre):
         k = _k(nombre)
@@ -102,7 +105,8 @@ class Contexto:
 
     def remolque_asignable(self, remolque):
         k = _k(remolque)
-        return self.situacion_remolque.get(k, "OPERANDO") == "OPERANDO" and self._viaje_tms("remolque_1", k, None) is None
+        return (self.situacion_remolque.get(k, "OPERANDO") == "OPERANDO" and self._viaje_tms("remolque_1", k, None) is None
+                and k not in self.dyr["remolque"])
 
     def ecos_activos_zam(self):
         return set(self.zam["eco"].map(_k)) - {""} if not self.zam.empty else set()
@@ -141,6 +145,9 @@ def validar(propuestas, ctx=None):
             elif sit != "OPERANDO":
                 errores.append(f"{etq}: la unidad {p['eco']} está en situación {sit}; "
                                "solo se asignan unidades OPERANDO.")
+            if eco in ctx.dyr["eco"]:
+                errores.append(f"{etq}: la unidad {p['eco']} tiene una DEVOLUCIÓN abierta en DYR (folio "
+                               f"{ctx.dyr['eco'][eco]}); hasta que el MASTER la libere no se puede asignar.")
             v = ctx._viaje_tms("eco", eco, id_)
             if v is not None:
                 errores.append(f"{etq}: la unidad {p['eco']} sigue activa en el {_desc_tms(v)}. "
@@ -171,6 +178,9 @@ def validar(propuestas, ctx=None):
             if sit_r != "OPERANDO":
                 errores.append(f"{etq}: el remolque {p['remolque_1']} está en situación {sit_r}; "
                                "solo se asignan remolques OPERANDO.")
+            if remolque in ctx.dyr["remolque"]:
+                errores.append(f"{etq}: la caja {p['remolque_1']} tiene una DEVOLUCIÓN abierta en DYR (folio "
+                               f"{ctx.dyr['remolque'][remolque]}); hasta que el MASTER la libere no se puede asignar.")
             v = ctx._viaje_tms("remolque_1", remolque, id_)
             if v is not None:
                 errores.append(f"{etq}: el remolque {p['remolque_1']} sigue activo en el {_desc_tms(v)}. "

@@ -68,7 +68,7 @@ COLUMNAS = [
 TIPO_POR_CLAVE = {c.clave: c.tipo for c in COLUMNAS}
 TITULO_POR_CLAVE = {c.clave: c.titulo for c in COLUMNAS}
 
-ROLES = ["TODOS", "OPS", "ATC", "TC"]
+ROLES = ["TODOS", "OPS", "ATC", "TC", "ADF", "MTTO"]   # ADF = Admin de Flota · MTTO = Mantenimiento
 
 # Estados posibles de una unidad
 ESTADOS_UNIDAD = [
@@ -90,7 +90,7 @@ LISTAS = {
 }
 
 # Situacion de cada vehiculo en el catalogo (vacio = OPERANDO)
-SITUACIONES = ["OPERANDO", "CORRALON", "SINIESTRO", "TALLER", "NO DISPONIBLE"]
+SITUACIONES = ["OPERANDO", "CORRALON", "SINIESTRO", "TALLER", "NO DISPONIBLE", "INACTIVA"]
 
 # Catalogos: tabla -> columnas (la primera es la llave unica, no se repite)
 CATALOGOS = {
@@ -132,7 +132,10 @@ PESTANAS = {
     "nuevo": "➕ Nuevo pedido",
     "mon": "📍 Monitoreo",
     "est": "📣 Estatus clientes",         # el estatus que TC le manda a cada cliente (captura de pantalla)
-    "op": "🚨 Levantar operativo",       # Reporte de Robo listo para WhatsApp + mapa del tracto y la caja
+    "op": "🚨 Levantar operativo",
+    "dyr": "↩️ DYR",                       # devoluciones y rechazos (OPS y MASTER)
+    "flota": "🚛 Flota",                   # Admin de Flota
+    "mtto": "🔧 Mantenimiento",            # Mantenimiento       # Reporte de Robo listo para WhatsApp + mapa del tracto y la caja
     "cat": "📚 Catálogos",
     "exp": "📤 Exportar CSV",
     "seg": "🔐 Usuarios y bitácora",      # solo usuarios MASTER
@@ -140,9 +143,11 @@ PESTANAS = {
 
 PERMISOS = {
     "ATC":   {"pestanas": ["plan", "nuevo", "mon", "cat", "exp"], "agregar_borrar": True,  "editar": True,  "zam": True, "monitoreo_editar": False},
-    "OPS":   {"pestanas": ["plan", "mon", "cat", "exp"],          "agregar_borrar": False, "editar": True,  "zam": True, "monitoreo_editar": False},
+    "OPS":   {"pestanas": ["plan", "mon", "dyr", "cat", "exp"],   "agregar_borrar": False, "editar": True,  "zam": True, "monitoreo_editar": False},
     "TC":    {"pestanas": ["plan", "mon", "est", "op", "exp"],                 "agregar_borrar": False, "editar": True,  "zam": False, "monitoreo_editar": True},
     "TODOS": {"pestanas": ["plan", "exp"],                        "agregar_borrar": False, "editar": False, "zam": False, "monitoreo_editar": False},
+    "ADF":   {"pestanas": ["flota"],                              "agregar_borrar": False, "editar": False, "zam": False, "monitoreo_editar": False},
+    "MTTO":  {"pestanas": ["mtto"],                               "agregar_borrar": False, "editar": False, "zam": False, "monitoreo_editar": False},
 }
 
 # Que significa "pendiente" para cada perfil (filtro rapido del Plan del dia)
