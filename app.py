@@ -1843,7 +1843,7 @@ def panel_operativo(eco, remolque):
 
 if "op" in T:
   with T["op"]:
-    st.subheader("🚨 Levantar operativo · Reporte de Robo")
+    st.subheader("🚨 Levantar operativo")
     st.caption("Escoge el **ECO del tracto**: el reporte se llena solo con el catálogo, el plan de carga, ZAM y Omnitracs. "
                "Corrige lo que haga falta, escribe la **mercancía** y copia el texto para WhatsApp "
                "(botón 📋 en la esquina del recuadro).")
@@ -1861,6 +1861,8 @@ if "op" in T:
         else:
             st.warning("Esta unidad no tiene viaje activo ni asignado en el plan ni en ZAM: "
                        "origen, destino, operador y caja quedan para llenarse a mano.")
+        tipo_ev = st.radio("TIPO DE EVENTO", operativo.TIPOS_EVENTO, horizontal=True, key="op_tipo_evento",
+                           help="Cambia el título del reporte y queda registrado en el historial")
         b1, b2, _ = st.columns([1.3, 1.6, 3])
         b1.button("🔄 Llenar de nuevo", on_click=_op_llenar, args=(eco_op,), key="op_rellenar")
         b2.button("📍 Poner ubicación actual", on_click=_op_ubicacion_actual, key="op_ubic")
@@ -1880,18 +1882,19 @@ if "op" in T:
                        + ". (VIN, marca, año y modelo se cargan en Catálogos › Vehículos; el teléfono en Operadores).")
 
         datos_op = _op_datos()
-        texto_op = operativo.texto_whatsapp(datos_op)
+        texto_op = operativo.texto_whatsapp(datos_op, operativo.titulo_evento(tipo_ev))
         st.markdown("**📲 Texto para WhatsApp** (pasa el mouse por el recuadro y da clic en 📋 para copiar)")
         st.code(texto_op, language=None, wrap_lines=True)
         from urllib.parse import quote as _quote
         w1, w2, w3, _ = st.columns([1.6, 1.6, 1.8, 2])
         w1.link_button("📲 Abrir en WhatsApp", "https://wa.me/?text=" + _quote(texto_op))
         w2.download_button("⬇️ Descargar .txt", texto_op.encode("utf-8"),
-                           file_name=f"reporte_robo_{eco_op}_{datetime.now():%Y%m%d_%H%M}.txt", mime="text/plain")
+                           file_name=f"reporte_{'_'.join(tipo_ev.lower().replace('ó', 'o').split())}_{eco_op}_"
+                                     f"{datetime.now():%Y%m%d_%H%M}.txt", mime="text/plain")
         if w3.button("📝 Registrar operativo", type="primary", key="op_registrar",
                      help="Guarda este reporte en el historial y en la bitácora (quién y a qué hora)."):
-            operativo.registrar(USR, datos_op, texto_op)
-            st.toast(f"Operativo de la unidad {eco_op} registrado", icon="🚨")
+            operativo.registrar(USR, datos_op, texto_op, tipo_ev)
+            st.toast(f"{tipo_ev.capitalize()} · unidad {eco_op}: operativo registrado", icon="🚨")
 
         st.divider()
         st.markdown("#### 🗺️ Dónde está")

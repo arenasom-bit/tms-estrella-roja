@@ -266,6 +266,13 @@ def datos_unidad(eco):
 
 
 # ---------------------------------------------------------- texto para WhatsApp
+TIPOS_EVENTO = ["ROBO", "ASALTO", "PERSECUCIÓN", "TENTATIVA DE ROBO"]
+
+
+def titulo_evento(tipo):
+    return f"REPORTE DE {tipo or 'ROBO'}"
+
+
 def texto_whatsapp(datos, titulo="REPORTE DE ROBO"):
     """Texto plano para pegar en WhatsApp (el titulo va en negritas con *...*)."""
     lineas = [f"*{titulo}*", ""]
@@ -280,15 +287,16 @@ def texto_whatsapp(datos, titulo="REPORTE DE ROBO"):
 
 
 # ---------------------------------------------------------- registro (historial de operativos)
-def registrar(quien, datos, texto):
+def registrar(quien, datos, texto, tipo="ROBO"):
     usuario = quien.get("usuario") if isinstance(quien, dict) else str(quien)
     with bd.conexion() as con:
         con.execute("INSERT INTO operativos (fecha, usuario, eco, remolque, tipo, texto) VALUES (?, ?, ?, ?, ?, ?)",
-                    [bd.AHORA_TXT(), usuario, _t(datos.get("eco")), _t(datos.get("caja")), "ROBO", texto])
-    bd.bitacora(quien, "OPERATIVO_ROBO", f"unidad {_t(datos.get('eco'))}", texto[:3900])
+                    [bd.AHORA_TXT(), usuario, _t(datos.get("eco")), _t(datos.get("caja")), tipo, texto])
+    accion = "OPERATIVO_" + "_".join(tipo.replace("Ó", "O").split())
+    bd.bitacora(quien, accion, f"unidad {_t(datos.get('eco'))}", texto[:3900])
 
 
 def historial(limite=30):
     with bd.conexion() as con:
-        return pd.read_sql_query("SELECT fecha, usuario, eco, remolque AS caja, texto FROM operativos "
+        return pd.read_sql_query("SELECT fecha, usuario, tipo AS evento, eco, remolque AS caja, texto FROM operativos "
                                  "ORDER BY id DESC LIMIT ?", con, params=[limite])
