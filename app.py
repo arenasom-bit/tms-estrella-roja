@@ -16,7 +16,7 @@ import sys as _sys
 # con la version vieja. Aqui se recargan los que cambiaron (el TMS sigue funcionando, no hace falta reiniciar).
 _MODULOS_TMS = ["configuracion", "columnas", "nube", "base_datos", "calculos", "conciliacion", "reglas", "estilo",
                 "omnitracs", "zam", "estatus_clientes", "respaldos", "importar_plan", "usuarios_excel", "catalogos_excel",
-                "operativo", "coherencia", "paradas"]
+                "operativo", "coherencia", "paradas", "zam_excel"]
 
 
 def _recargar_modulos_cambiados():
@@ -49,6 +49,7 @@ import omnitracs
 import operativo
 import coherencia
 import paradas
+import zam_excel
 import reglas
 import respaldos
 import usuarios_excel
@@ -1907,6 +1908,40 @@ if "cat" in T:
                 st.session_state.mensaje = (f"Plan al día ✅  {r['nuevos']} nuevos · {r['actualizados']} actualizados · "
                                             f"{r['sin_cambio']} sin cambio · {r['duplicados']} copias repetidas juntadas")
                 st.rerun()
+
+    with st.expander("🔗 Poner el plan de acuerdo con ZAM (reporte de viajes de ZAM en Excel)"):
+        st.write("Sube el **reporte de viajes de ZAM** (Viaje, Estatus Viaje, Num. Guía, Unidad, Operador, Remitente, "
+                 "Destinatario, Tipo Operación, Fecha Despacho...). Cada viaje se empata con el plan por **# VIAJE**, "
+                 "**guía (CP)** o **unidad + fecha**: se llenan **solo los datos vacíos** (# viaje, operador, nómina, "
+                 "remolque, flete, inicio de ruta...) y los viajes que el plan no tiene se **agregan**. Lo que ZAM ya "
+                 "terminó pero no tiene horas de descarga va a 🔔 Por confirmar. No duplica.")
+        rep_zam = st.file_uploader("Reporte de viajes ZAM (.xlsx)", type=["xlsx"], key="rep_zam")
+        if rep_zam is not None:
+            z1, z2, _ = st.columns([1.3, 1.8, 4])
+            if z1.button("👀 Revisar sin guardar", key="zam_probar"):
+                rep_zam.seek(0)
+                try:
+                    r = zam_excel.sincronizar(rep_zam, aplicar=False)
+                    st.info(f"De {r['zam']} viajes ZAM: {r['por_viaje']} ya enlazados por # VIAJE · {r['por_guia']} por guía · "
+                            f"{r['por_unidad']} por unidad y fecha · **{r['nuevos']} se agregan** · "
+                            f"**{r['llenados']} viajes reciben datos que les faltaban** · {r['cerrados']} se cierran · "
+                            f"{r['por_confirmar']} van a 🔔 Por confirmar")
+                    if r["campos"]:
+                        st.caption("Datos que se llenan: " + ", ".join(f"{c} ({n})" for c, n in
+                                                                     sorted(r["campos"].items(), key=lambda x: -x[1])))
+                except ValueError as e:
+                    st.error(str(e))
+            if z2.button("✅ Poner de acuerdo con ZAM", type="primary", key="zam_aplicar"):
+                rep_zam.seek(0)
+                try:
+                    r = zam_excel.sincronizar(rep_zam, aplicar=True, quien=USR)
+                    coherencia.ejecutar(forzar=True, quien=USR)
+                    st.session_state.version += 1
+                    st.session_state.mensaje = (f"Plan de acuerdo con ZAM ✅  {r['nuevos']} agregados · {r['llenados']} completados · "
+                                                f"{r['cerrados']} cerrados · {r['por_confirmar']} por confirmar")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(str(e))
 
     def editor_catalogo(tabla, config=None):
         df_c = bd.leer_catalogo(tabla)

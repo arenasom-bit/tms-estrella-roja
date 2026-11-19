@@ -118,12 +118,48 @@ def ejecutar(forzar=False, quien="SISTEMA"):
     except Exception:
         pass
     try:
+        res["enlazados_zam"] = enlazar_zam_vista()
+    except Exception:
+        pass
+    try:
         sup = viajes_superados()
         res["superados"] = cerrar([x for x in sup if x[3]], quien)
         res["por_confirmar"] = poner_por_confirmar([x for x in sup if not x[3]], "PLAN")
     except Exception:
         pass
     return res
+
+
+def enlazar_zam_vista(horas=12):
+    """Viajes del plan SIN # VIAJE: si la vista de ZAM tiene un viaje abierto de la misma unidad con salida a menos
+    de 'horas' de la cita de carga (y ese viaje ZAM no esta en otro viaje del plan), se le pone el # VIAJE."""
+    z = bd.leer_zam()
+    if z.empty:
+        return 0
+    todos = bd.leer_viajes("0000-01-01", "9999-12-31")
+    ya = {_k(x) for x in todos["num_viaje"]} | {_k(x) for x in todos["pedido"]}
+    z = z[~z["shipment_id"].map(_k).isin(ya)].copy()
+    if z.empty:
+        return 0
+    z["_sal"] = pd.to_datetime(z["salida_plan"], errors="coerce")
+    df = _preparar(todos[todos["num_viaje"].map(_k) == ""], pd.Timestamp.now())
+    df = df[df["_abierto"]]
+    puestos, n = set(), 0
+    for _, v in df.iterrows():
+        c = z[(z["eco"].map(_k) == v["_eco"]) & ~z["shipment_id"].isin(puestos)]
+        if c.empty or pd.isna(v["_ref"]):
+            continue
+        dif = (c["_sal"] - v["_ref"]).abs()
+        c = c[dif <= pd.Timedelta(hours=horas)]
+        if len(c) != 1:                       # solo si no hay duda
+            continue
+        sid = c.iloc[0]["shipment_id"]
+        bd.actualizar_viaje(int(v["id"]), {"num_viaje": str(sid)})
+        puestos.add(sid)
+        n += 1
+    if n:
+        bd.bitacora("SISTEMA", "ZAM_ENLACE_AUTOMATICO", f"{n} viaje(s)", "Se les puso el # VIAJE de ZAM (misma unidad y hora)")
+    return n
 
 
 def registrar_cierres_zam(cerrados):
