@@ -17,7 +17,7 @@ import sys as _sys
 _MODULOS_TMS = ["configuracion", "columnas", "nube", "base_datos", "calculos", "conciliacion", "reglas", "estilo",
                 "omnitracs", "zam", "estatus_clientes", "respaldos", "importar_plan", "usuarios_excel", "catalogos_excel",
                 "operativo", "coherencia", "paradas", "zam_excel",
-                "dyr", "flota", "mantenimiento"]
+                "dyr", "flota", "mantenimiento", "disponibilidad"]
 
 
 def _recargar_modulos_cambiados():
@@ -52,6 +52,7 @@ import coherencia
 import paradas
 import zam_excel
 import dyr
+import disponibilidad
 import flota
 import mantenimiento
 import reglas
@@ -59,7 +60,8 @@ import respaldos
 import usuarios_excel
 import zam
 from columnas import (CATALOGO_DE, CATALOGOS, COLUMNAS, CONTEXTO, ESTATUS_CERRADOS, FICHA_REQUERIDOS, LISTAS,
-                      PENDIENTES, PERMISOS, PESTANAS, ROLES, SITUACIONES, TIPO_POR_CLAVE, TITULO_POR_CLAVE)
+                      PENDIENTES, PERMISOS, PESTANAS, ROLES, SITUACIONES, TIPO_POR_CLAVE, TITULO_POR_CLAVE,
+                      ESTATUS_OPERADOR)
 
 VERSION_TMS = "12/11 v4"            # se ve en la pantalla de entrada: sirve para saber que version esta publicada
 st.set_page_config(page_title="TMS · Estrella Roja",
@@ -285,7 +287,7 @@ def una_por_eco(pos):
 
 
 def claves_visibles(rol):
-    if rol == "TODOS":
+    if rol in ("TODOS", "JEFE OPS"):
         return [c.clave for c in COLUMNAS]
     return [c.clave for c in COLUMNAS if c.rol == rol or c.clave in CONTEXTO]
 
@@ -520,7 +522,9 @@ else:
     with st.sidebar:
         st.divider()
         st.caption(estado_zam())
-        if not perm["editar"] and rol not in ("ADF", "MTTO"):
+        if rol == "JEFE OPS":
+            st.caption("🟢 Jefe Ops: capturas la Disponibilidad y los catálogos de Vehículos y Operadores; lo demás es solo consulta.")
+        elif not perm["editar"] and rol not in ("ADF", "MTTO"):
             st.caption("🔒 Perfil de solo consulta: puedes ver el Plan del día y exportar.")
 
 estilo.encabezado("Plan de carga TMS", f"Operación del {dia:%d/%m/%Y} · vista {rol}")
@@ -530,7 +534,8 @@ if st.session_state.get("mensaje"):
     st.success(st.session_state.pop("mensaje"), icon="🚛")
 
 # ------------------------------------------------------------------ pestañas (cada perfil ve solo las suyas)
-claves_tabs = perm["pestanas"] + (["dyr"] if es_master and "dyr" not in perm["pestanas"] else []) + (["seg"] if es_master else [])
+claves_tabs = (perm["pestanas"] + [k for k in ("dyr", "dispo") if es_master and k not in perm["pestanas"]]
+               + (["seg"] if es_master else []))
 try:                                     # key: la pagina recuerda en que pestaña estabas (tras guardar, avisos, etc.)
     _pestanas = st.tabs([PESTANAS[k] for k in claves_tabs], key=f"pestanas_{rol}", on_change="rerun")
 except TypeError:                        # Streamlit viejo (sin key en tabs)
@@ -741,8 +746,10 @@ if "plan" in T:
     zam_activos = reglas.Contexto().ecos_activos_zam()          # ECO con viaje 'open' en ZAM
     flota_zam = flota["_k"].str.upper().isin(zam_activos)
     en_dyr = flota["_k"].str.upper().isin(set(dyr.bloqueados()["eco"]))           # devolución DYR sin liberar
+    ausentes = disponibilidad.operadores_no_disponibles()                     # Disponibilidad: descanso, vacaciones...
+    op_fuera = flota["operador"].map(lambda o: bool(reglas._k(o)) and reglas._k(o) in ausentes)
     libres = flota[(flota["situacion"] == "OPERANDO") & (~flota["_k"].isin(ecos_ocupados))
-                   & (~flota_zam) & (~en_dyr)].copy()
+                   & (~flota_zam) & (~en_dyr) & (~op_fuera)].copy()
     libres["motivo"] = libres["_k"].map(lambda k: "Terminó o canceló su viaje" if k in ecos_en_plan
                                         else "Sin viaje en el plan")
     disp_plan = int((libres["motivo"] != "Sin viaje en el plan").sum())
@@ -785,7 +792,8 @@ if "plan" in T:
         resumen = " · ".join(f"{x.title()}: {int((flota['situacion'] == x).sum())}" for x in SITUACIONES)
         st.caption("Flota por situación → " + resumen
                    + f" · En viaje TMS: {len(ecos_ocupados & set(flota['_k']))}"
-                   + f" · Con viaje abierto en ZAM: {int(flota_zam.sum())}")
+                   + f" · Con viaje abierto en ZAM: {int(flota_zam.sum())}"
+                   + f" · Operador titular ausente (🟢 Disponibilidad): {int((op_fuera & (flota['situacion'] == 'OPERANDO')).sum())}")
         st.dataframe(libres[["eco", "operador", "motivo"]].rename(
             columns={"eco": "ECO", "operador": "OPERADOR HABITUAL", "motivo": "MOTIVO"}), hide_index=True)
 
@@ -1082,11 +1090,12 @@ if "nuevo" in T:
 # Reemplaza el Excel de seguimiento: todo sale del plan de carga + ZAM + Omnitracs.
 ESTATUS1 = {"DISPONIBLE": "⚪ DISPONIBLE", "PROGRAMADO": "🟡 ASIGNADO", "CARGANDO": "🟠 EN CARGA",
             "TRANSITO CARGADO": "🔵 CARGADO", "DESCARGANDO": "🟣 EN DESCARGA"}
-ESTATUS1_EXTRA = ["🟤 VACÍO", "↩️ DEVOLUCIÓN", "🤝 PRÉSTAMO"]          # los que el Excel tenía y no son automáticos
+ESTATUS1_EXTRA = ["🟤 VACÍO", "↩️ DEVOLUCIÓN", "🤝 PRÉSTAMO", "😴 SIN OPERADOR"]          # los que el Excel tenía y no son automáticos
 AUTOMATICO = "🔄 AUTOMÁTICO"
 # Estos estatus viven en el catálogo de Vehículos (SITUACIÓN): al elegirlos allá también cambia, y la unidad no se puede asignar
 ESTATUS1_SITUACION = {"CORRALON": "🚫 CORRALÓN", "TALLER": "🔧 TALLER", "SINIESTRO": "🚨 SINIESTRO",
-                      "NO DISPONIBLE": "⛔ NO DISPONIBLE", "INACTIVA": "⚫ INACTIVA"}
+                      "NO DISPONIBLE": "⛔ NO DISPONIBLE", "INACTIVA": "⚫ INACTIVA", "SEGURIDAD": "🛡️ SEGURIDAD",
+                      "AGENCIA": "🏭 AGENCIA", "DESHABILITACION": "🔩 DESHABILITACIÓN", "HABILITACION": "🔩 HABILITACIÓN"}
 SITUACION_DE_TEXTO = {v: k for k, v in ESTATUS1_SITUACION.items()}
 OPCIONES_ESTATUS1 = [AUTOMATICO] + list(ESTATUS1.values()) + ESTATUS1_EXTRA + list(ESTATUS1_SITUACION.values())
 OPCIONES_ESTATUS2 = [AUTOMATICO, "🟢 EN TRÁNSITO", "🔴 DETENIDA", "🅿️ RESGUARDO"]
@@ -1197,6 +1206,7 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
     # --- ESTATUS 1 y ESTATUS 2
     blk = dyr.bloqueados()
     dyr_eco = {omnitracs.normalizar_alias(e): fo for e, fo in blk["eco"].items()}
+    ausentes_mon = disponibilidad.operadores_no_disponibles()          # operador titular de descanso/vacaciones...
 
     def estatus1(f):
         if f["situacion"] in ESTATUS1_SITUACION:
@@ -1205,6 +1215,8 @@ def armar_monitoreo(dia, tipo_sel, incluir_libres):
             return "↩️ DEVOLUCIÓN"
         if f["_viaje"]:
             return ESTATUS1.get(f["estatus_viaje"], f["estatus_viaje"] or "🟡 ASIGNADO")
+        if reglas._k(f["operador_habitual"]) in ausentes_mon:
+            return "😴 SIN OPERADOR"
         if f["clave"] in vacio:
             return "🟤 VACÍO"
         return ESTATUS1["DISPONIBLE"]
@@ -1920,92 +1932,106 @@ if "cat" in T:
     st.subheader("Catálogos")
     st.caption("Se llenan una vez y ahorran mucho tecleo: aparecen como listas desplegables en el plan.")
 
-    with st.expander("📥 Cargar catálogos desde Excel (plantilla o reporte de viajes)"):
-        st.write("1. Descarga la plantilla (vacía, o con lo que ya tienes) · 2. Llénala o agrégale filas · "
-                 "3. Súbela aquí. **Cargar nunca borra nada**: solo agrega lo nuevo y completa lo que falte.")
-        c1, c2 = st.columns(2)
-        c1.download_button("⬇️ Plantilla vacía", _excel_catalogos(False, 0),
-                           file_name="plantilla_catalogos.xlsx", mime=XLSX)
-        c2.download_button("⬇️ Catálogos actuales (respaldo)", _excel_catalogos(True, st.session_state.version),
-                           file_name=f"catalogos_{date.today()}.xlsx", mime=XLSX)
-        archivo = st.file_uploader("Sube tu Excel", type=["xlsx"])
-        if archivo is not None and st.button("Cargar catálogos", type="primary"):
-            try:
-                tipo_arch, resumen = catalogos_excel.cargar_catalogos(archivo)
-                partes = [f"{t}: {r['nuevos']} nuevos, {r['actualizados']} actualizados" for t, r in resumen.items()]
-                bd.bitacora(USR, "CATALOGO_EXCEL_CARGADO", tipo_arch, " · ".join(partes))
-                st.session_state.version += 1
-                st.session_state.mensaje = f"Archivo ({tipo_arch}) cargado ✅  " + " · ".join(partes)
-                st.rerun()
-            except Exception as e:
-                st.error(f"No se pudo cargar: {e}")
-
-    with st.expander("🔄 Poner al día el plan de carga desde el Excel de planes (todas las pestañas)"):
-        st.write("Sube el libro de planes (PEPSICO DEDICADO, PEPSICO CELAYA, SPOT, PEPSICO, KN, COPPEL, LA COMER, DHL, RYC). "
-                 "Cada renglón se empata con su viaje del TMS por **pedido, CP / folio ZAM, # viaje** o **unidad + cita**: "
-                 "si ya existe se actualiza, si no se agrega. Antes junta los viajes que estén repetidos en el TMS. "
-                 "Puedes subirlo las veces que quieras: no duplica.")
-        libro = st.file_uploader("Libro de planes (.xlsx)", type=["xlsx"], key="libro_planes")
-        if libro is not None:
-            p1, p2, _ = st.columns([1.3, 1.6, 4])
-            if p1.button("👀 Revisar sin guardar", key="plan_probar"):
-                libro.seek(0)
-                r = importar_plan.sincronizar(libro, aplicar=False)
-                st.info(f"Si lo aplicas: {r['duplicados']} copias repetidas se juntan · {r['nuevos']} viajes nuevos · "
-                        f"{r['actualizados']} se actualizan · {r['sin_cambio']} ya están al día · "
-                        f"{r['finalizados']} quedan ✅ · {r['cancelados']} quedan ❌")
-                st.dataframe(pd.DataFrame(r["detalle"], columns=["PESTAÑA", "RENGLÓN", "QUÉ PASA", "DETALLE"]),
-                             hide_index=True, height=300)
-            if p2.button("✅ Poner al día el plan", type="primary", key="plan_aplicar"):
-                libro.seek(0)
-                r = importar_plan.sincronizar(libro, aplicar=True, quien=USR)
-                coherencia.ejecutar(forzar=True, quien=USR)
-                st.session_state.version += 1
-                st.session_state.mensaje = (f"Plan al día ✅  {r['nuevos']} nuevos · {r['actualizados']} actualizados · "
-                                            f"{r['sin_cambio']} sin cambio · {r['duplicados']} copias repetidas juntadas")
-                st.rerun()
-
-    with st.expander("🔗 Poner el plan de acuerdo con ZAM (reporte de viajes de ZAM en Excel)"):
-        st.write("Sube el **reporte de viajes de ZAM** (Viaje, Estatus Viaje, Num. Guía, Unidad, Operador, Remitente, "
-                 "Destinatario, Tipo Operación, Fecha Despacho...). Cada viaje se empata con el plan por **# VIAJE**, "
-                 "**guía (CP)** o **unidad + fecha**: se llenan **solo los datos vacíos** (# viaje, operador, nómina, "
-                 "remolque, flete, inicio de ruta...) y los viajes que el plan no tiene se **agregan**. Lo que ZAM ya "
-                 "terminó pero no tiene horas de descarga va a 🔔 Por confirmar. No duplica.")
-        rep_zam = st.file_uploader("Reporte de viajes ZAM (.xlsx)", type=["xlsx"], key="rep_zam")
-        if rep_zam is not None:
-            z1, z2, _ = st.columns([1.3, 1.8, 4])
-            if z1.button("👀 Revisar sin guardar", key="zam_probar"):
-                rep_zam.seek(0)
+    if perm["catalogos"] is None:            # JEFE OPS: sin cargas masivas (solo Vehículos y Operadores a mano)
+        with st.expander("📥 Cargar catálogos desde Excel (plantilla o reporte de viajes)"):
+            st.write("1. Descarga la plantilla (vacía, o con lo que ya tienes) · 2. Llénala o agrégale filas · "
+                     "3. Súbela aquí. **Cargar nunca borra nada**: solo agrega lo nuevo y completa lo que falte.")
+            c1, c2 = st.columns(2)
+            c1.download_button("⬇️ Plantilla vacía", _excel_catalogos(False, 0),
+                               file_name="plantilla_catalogos.xlsx", mime=XLSX)
+            c2.download_button("⬇️ Catálogos actuales (respaldo)", _excel_catalogos(True, st.session_state.version),
+                               file_name=f"catalogos_{date.today()}.xlsx", mime=XLSX)
+            archivo = st.file_uploader("Sube tu Excel", type=["xlsx"])
+            if archivo is not None and st.button("Cargar catálogos", type="primary"):
                 try:
-                    r = zam_excel.sincronizar(rep_zam, aplicar=False)
-                    st.info(f"De {r['zam']} viajes ZAM: {r['por_viaje']} ya enlazados por # VIAJE · {r['por_guia']} por guía · "
-                            f"{r['por_unidad']} por unidad y fecha · **{r['nuevos']} se agregan** · "
-                            f"**{r['llenados']} viajes reciben datos que les faltaban** · {r['cerrados']} se cierran · "
-                            f"{r['por_confirmar']} van a 🔔 Por confirmar")
-                    if r["campos"]:
-                        st.caption("Datos que se llenan: " + ", ".join(f"{c} ({n})" for c, n in
-                                                                     sorted(r["campos"].items(), key=lambda x: -x[1])))
-                except ValueError as e:
-                    st.error(str(e))
-            if z2.button("✅ Poner de acuerdo con ZAM", type="primary", key="zam_aplicar"):
-                rep_zam.seek(0)
-                try:
-                    r = zam_excel.sincronizar(rep_zam, aplicar=True, quien=USR)
+                    tipo_arch, resumen = catalogos_excel.cargar_catalogos(archivo)
+                    partes = [f"{t}: {r['nuevos']} nuevos, {r['actualizados']} actualizados" for t, r in resumen.items()]
+                    bd.bitacora(USR, "CATALOGO_EXCEL_CARGADO", tipo_arch, " · ".join(partes))
+                    st.session_state.version += 1
+                    st.session_state.mensaje = f"Archivo ({tipo_arch}) cargado ✅  " + " · ".join(partes)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"No se pudo cargar: {e}")
+
+        with st.expander("🔄 Poner al día el plan de carga desde el Excel de planes (todas las pestañas)"):
+            st.write("Sube el libro de planes (PEPSICO DEDICADO, PEPSICO CELAYA, SPOT, PEPSICO, KN, COPPEL, LA COMER, DHL, RYC). "
+                     "Cada renglón se empata con su viaje del TMS por **pedido, CP / folio ZAM, # viaje** o **unidad + cita**: "
+                     "si ya existe se actualiza, si no se agrega. Antes junta los viajes que estén repetidos en el TMS. "
+                     "Puedes subirlo las veces que quieras: no duplica.")
+            libro = st.file_uploader("Libro de planes (.xlsx)", type=["xlsx"], key="libro_planes")
+            if libro is not None:
+                p1, p2, _ = st.columns([1.3, 1.6, 4])
+                if p1.button("👀 Revisar sin guardar", key="plan_probar"):
+                    libro.seek(0)
+                    r = importar_plan.sincronizar(libro, aplicar=False)
+                    st.info(f"Si lo aplicas: {r['duplicados']} copias repetidas se juntan · {r['nuevos']} viajes nuevos · "
+                            f"{r['actualizados']} se actualizan · {r['sin_cambio']} ya están al día · "
+                            f"{r['finalizados']} quedan ✅ · {r['cancelados']} quedan ❌")
+                    st.dataframe(pd.DataFrame(r["detalle"], columns=["PESTAÑA", "RENGLÓN", "QUÉ PASA", "DETALLE"]),
+                                 hide_index=True, height=300)
+                if p2.button("✅ Poner al día el plan", type="primary", key="plan_aplicar"):
+                    libro.seek(0)
+                    r = importar_plan.sincronizar(libro, aplicar=True, quien=USR)
                     coherencia.ejecutar(forzar=True, quien=USR)
                     st.session_state.version += 1
-                    st.session_state.mensaje = (f"Plan de acuerdo con ZAM ✅  {r['nuevos']} agregados · {r['llenados']} completados · "
-                                                f"{r['cerrados']} cerrados · {r['por_confirmar']} por confirmar")
+                    st.session_state.mensaje = (f"Plan al día ✅  {r['nuevos']} nuevos · {r['actualizados']} actualizados · "
+                                                f"{r['sin_cambio']} sin cambio · {r['duplicados']} copias repetidas juntadas")
                     st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
+
+        with st.expander("🔗 Poner el plan de acuerdo con ZAM (reporte de viajes de ZAM en Excel)"):
+            st.write("Sube el **reporte de viajes de ZAM** (Viaje, Estatus Viaje, Num. Guía, Unidad, Operador, Remitente, "
+                     "Destinatario, Tipo Operación, Fecha Despacho...). Cada viaje se empata con el plan por **# VIAJE**, "
+                     "**guía (CP)** o **unidad + fecha**: se llenan **solo los datos vacíos** (# viaje, operador, nómina, "
+                     "remolque, flete, inicio de ruta...) y los viajes que el plan no tiene se **agregan**. Lo que ZAM ya "
+                     "terminó pero no tiene horas de descarga va a 🔔 Por confirmar. No duplica.")
+            rep_zam = st.file_uploader("Reporte de viajes ZAM (.xlsx)", type=["xlsx"], key="rep_zam")
+            if rep_zam is not None:
+                z1, z2, _ = st.columns([1.3, 1.8, 4])
+                if z1.button("👀 Revisar sin guardar", key="zam_probar"):
+                    rep_zam.seek(0)
+                    try:
+                        r = zam_excel.sincronizar(rep_zam, aplicar=False)
+                        st.info(f"De {r['zam']} viajes ZAM: {r['por_viaje']} ya enlazados por # VIAJE · {r['por_guia']} por guía · "
+                                f"{r['por_unidad']} por unidad y fecha · **{r['nuevos']} se agregan** · "
+                                f"**{r['llenados']} viajes reciben datos que les faltaban** · {r['cerrados']} se cierran · "
+                                f"{r['por_confirmar']} van a 🔔 Por confirmar")
+                        if r["campos"]:
+                            st.caption("Datos que se llenan: " + ", ".join(f"{c} ({n})" for c, n in
+                                                                         sorted(r["campos"].items(), key=lambda x: -x[1])))
+                    except ValueError as e:
+                        st.error(str(e))
+                if z2.button("✅ Poner de acuerdo con ZAM", type="primary", key="zam_aplicar"):
+                    rep_zam.seek(0)
+                    try:
+                        r = zam_excel.sincronizar(rep_zam, aplicar=True, quien=USR)
+                        coherencia.ejecutar(forzar=True, quien=USR)
+                        st.session_state.version += 1
+                        st.session_state.mensaje = (f"Plan de acuerdo con ZAM ✅  {r['nuevos']} agregados · {r['llenados']} completados · "
+                                                    f"{r['cerrados']} cerrados · {r['por_confirmar']} por confirmar")
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
 
     def editor_catalogo(tabla, config=None):
         df_c = bd.leer_catalogo(tabla)
+        if tabla == "operadores":
+            df_c["regresa"] = pd.to_datetime(df_c["regresa"], errors="coerce").dt.date
         st.caption(f"{len(df_c)} registros. La lupa de la tabla sirve para buscar.")
+        if perm["catalogos"] is not None and tabla not in perm["catalogos"]:
+            st.caption("🔒 Solo consulta para tu perfil.")
+            st.dataframe(df_c, hide_index=True, column_config=config or {})
+            return
         ed = st.data_editor(df_c, key=f"cat_{tabla}_{st.session_state.version}", num_rows="dynamic",
                             hide_index=True, column_config=config or {})
         if st.button("💾 Guardar", key=f"btn_{tabla}"):
             antes_n = len(df_c)
+            if tabla == "unidades" and not es_master:          # de TALLER solo saca Mantenimiento
+                ant_sit = dict(zip(df_c["eco"].astype(str), df_c["situacion"].fillna("OPERANDO")))
+                malos = [str(e) for e, sn in zip(ed["eco"].astype(str), ed["situacion"].fillna("OPERANDO"))
+                         if ant_sit.get(e) == "TALLER" and sn != "TALLER"]
+                if malos:
+                    st.error("Estas unidades están en TALLER y solo Mantenimiento las libera: " + ", ".join(malos))
+                    return
             bd.reemplazar_catalogo(tabla, ed)
             bd.bitacora(USR, "CATALOGO_GUARDADO", tabla, f"Registros antes: {antes_n} · después: {len(ed)}")
             st.session_state.version += 1
@@ -2020,8 +2046,9 @@ if "cat" in T:
             "eco": "ECO",
             "operador": st.column_config.SelectboxColumn(
                 "OPERADOR HABITUAL", options=bd.opciones_catalogo("operadores", "nombre")),
-            "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES, disabled=not es_master,
-                                                          help="La cambia el Admin de Flota (o Mantenimiento: TALLER)"),
+            "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES,
+                                                          disabled=not (es_master or rol == "JEFE OPS"),
+                                                          help="La cambia el Admin de Flota, el Jefe Ops (o Mantenimiento: TALLER)"),
             "placas": "PLACAS", "vin": "VIN", "marca": "MARCA", "modelo": "MODELO", "anio": "AÑO"})
     with sub[1]:
         st.caption("Solo los remolques en SITUACIÓN = OPERANDO se pueden asignar a un viaje.")
@@ -2029,7 +2056,12 @@ if "cat" in T:
                                       "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES,
                                                                                     disabled=not es_master), "vin": "VIN"})
     with sub[2]:
-        editor_catalogo("operadores", {"nomina": "NÓMINA", "nombre": "NOMBRE", "telefono": "TELÉFONO"})
+        st.caption("ESTATUS vacío o ACTIVO = puede trabajar. DESCANSO, VACACIONES, INCAPACIDAD... = **no se puede asignar** "
+                   "hasta la fecha de **REGRESA** (ese día vuelve solo a ACTIVO; sin fecha queda bloqueado hasta que lo cambien).")
+        editor_catalogo("operadores", {"nomina": "NÓMINA", "nombre": "NOMBRE", "telefono": "TELÉFONO",
+                                       "estatus": st.column_config.SelectboxColumn("ESTATUS", options=ESTATUS_OPERADOR),
+                                       "regresa": st.column_config.DateColumn("REGRESA", format="DD/MM/YYYY"),
+                                       "comentario": "COMENTARIO"})
     with sub[3]:
         editor_catalogo("clientes", {"nombre": "CLIENTE", "rfc": "RFC"})
     with sub[4]:
@@ -2054,7 +2086,7 @@ if "cat" in T:
                    "Da de alta ECOs (como OPERANDO) y nóminas nuevas, guarda las placas del tracto y "
                    "marca como ACTIVOS a la unidad y al operador de cada viaje 'open'.")
         c1, c2 = st.columns([1, 3])
-        if c1.button("🔄 Actualizar ahora", key="btn_zam"):
+        if perm["zam"] and c1.button("🔄 Actualizar ahora", key="btn_zam"):
             try:
                 with st.spinner("Consultando viajes abiertos en ZAM..."):
                     zam.actualizar_ahora()
@@ -2117,7 +2149,7 @@ if "dyr" in T:
     cfg_dyr = {"id": None}
     for c, titulo, grupo in dyr.CAMPOS:
         marca = "" if grupo == "OPS" else (" 🔒" if grupo == "MESA" else " ⚙️")
-        bloq = not (puede_master or grupo == "OPS")
+        bloq = not (puede_master or grupo == "OPS") or not (puede_master or perm["dyr_editar"])
         if c in dyr.FECHAS:
             cfg_dyr[c] = st.column_config.DatetimeColumn(titulo + marca, format="DD/MM/YY HH:mm", disabled=bloq)
         elif c == "motivo":
@@ -2135,9 +2167,13 @@ if "dyr" in T:
             cfg_dyr[c] = st.column_config.TextColumn(titulo + marca, disabled=bloq)
     st.caption("⚙️ = formulado (lo llena el TMS; solo MASTER lo corrige) · 🔒 = mesa de control (solo MASTER). "
                "Para agregar: escribe el FOLIO CLIENTE en la fila vacía del final.")
-    ed_dyr = st.data_editor(vista_dyr, column_config=cfg_dyr, hide_index=True, num_rows="dynamic",
-                            key=f"dyr_ed_{st.session_state.get('dyr_ver', 0)}_{filtro_dyr}_{buscar_dyr}", height=420)
-    if st.button("💾 Guardar DYR", type="primary", key="dyr_guardar"):
+    dyr_lectura = not (puede_master or perm["dyr_editar"])
+    if dyr_lectura:
+        st.caption("🔒 Solo consulta para tu perfil.")
+    ed_dyr = st.data_editor(vista_dyr, column_config=cfg_dyr, hide_index=True, num_rows="fixed" if dyr_lectura else "dynamic",
+                            key=f"dyr_ed_{st.session_state.get('dyr_ver', 0)}_{filtro_dyr}_{buscar_dyr}", height=420,
+                            disabled=dyr_lectura)
+    if not dyr_lectura and st.button("💾 Guardar DYR", type="primary", key="dyr_guardar"):
         n, c, b, avisos_d = dyr.guardar(vista_dyr, ed_dyr, USR, puede_master)
         for a in avisos_d:
             st.warning(a)
@@ -2308,6 +2344,149 @@ if "exp" in T:
     else:
         st.info("Elige la fecha final del rango.")
 
+# ================================================================== DISPONIBILIDAD (lo captura JEFE OPS)
+if "dispo" in T:
+  with T["dispo"]:
+    st.subheader("🟢 Control de disponibilidad de la flota")
+    puede_dispo = es_master or perm["dispo_editar"]
+    st.caption("Reemplaza el Excel CONTROL DE DISPONIBILIDAD. **EN SERVICIO, PROGRAMADA y DISPONIBLE los calcula el TMS** "
+               "con los viajes. El **JEFE OPS** captura lo que impide trabajar: el **ESTATUS DEL OPERADOR** (descanso, "
+               "vacaciones, incapacidad...) con su fecha de **REGRESA** y la **SITUACIÓN** de la unidad. Unidad que no esté "
+               "OPERANDO u operador que no esté ACTIVO **no se puede asignar** en el Plan.")
+    try:
+        datos_d = disponibilidad.tabla()
+    except Exception as e:
+        st.error(f"No se pudo armar la disponibilidad: {e}")
+        datos_d = pd.DataFrame()
+    if not datos_d.empty:
+        controladas = datos_d[datos_d["operacion"].fillna("").astype(str).str.strip() != ""]
+        base_m = controladas if len(controladas) else datos_d
+        cuenta_d = base_m["estatus"].value_counts()
+        tot_d = len(base_m)
+        md = st.columns(6)
+        md[0].metric("Unidades", tot_d)
+        for col, e_ in zip(md[1:], ["EN SERVICIO", "PROGRAMADA", "DISPONIBLE", "SIN OPERADOR"]):
+            n_ = int(cuenta_d.get(e_, 0))
+            col.metric(e_.capitalize(), n_, f"{n_ / tot_d:.0%}" if tot_d else None, delta_color="off")
+        n_no = tot_d - sum(int(cuenta_d.get(x, 0)) for x in ["EN SERVICIO", "PROGRAMADA", "DISPONIBLE", "SIN OPERADOR"])
+        md[5].metric("No disponibles", n_no, f"{n_no / tot_d:.0%}" if tot_d else None, delta_color="off",
+                     help="Taller, inactiva, siniestro, seguridad, corralón, devolución DYR...")
+        with st.expander("📊 Resumen por operación (como RESUMEN GRAL)", expanded=False):
+            st.dataframe(disponibilidad.resumen(base_m), use_container_width=True)
+        d1, d2, d3, d4 = st.columns([1.3, 2, 1.6, 2])
+        ops_d = ["(Todas)"] + sorted({str(x) for x in datos_d["operacion"].dropna() if str(x).strip()}) + ["(sin operación)"]
+        f_op = d1.selectbox("Operación", ops_d, key="dispo_op")
+        circs = ["(Todos)"] + sorted({str(x) for x in datos_d["circuito"].dropna() if str(x).strip()})
+        f_ci = d2.selectbox("Circuito", circs, key="dispo_circ")
+        f_es = d3.selectbox("Estatus", ["(Todos)"] + sorted(datos_d["estatus"].unique().tolist()), key="dispo_est")
+        f_bu = d4.text_input("Buscar (ECO, operador, caja...)", key="dispo_buscar")
+        vista_d = datos_d
+        if f_op == "(sin operación)":
+            vista_d = vista_d[vista_d["operacion"].fillna("").astype(str).str.strip() == ""]
+        elif f_op != "(Todas)":
+            vista_d = vista_d[vista_d["operacion"] == f_op]
+        if f_ci != "(Todos)":
+            vista_d = vista_d[vista_d["circuito"] == f_ci]
+        if f_es != "(Todos)":
+            vista_d = vista_d[vista_d["estatus"] == f_es]
+        if f_bu.strip():
+            q_ = f_bu.strip().upper()
+            vista_d = vista_d[vista_d.astype(str).apply(lambda r: q_ in " ".join(r).upper(), axis=1)]
+        ed_lock = not puede_dispo
+        cfg_d = {
+            "operacion": st.column_config.SelectboxColumn("OPERACIÓN", options=disponibilidad.OPERACIONES, disabled=ed_lock),
+            "gerencia": st.column_config.TextColumn("GERENCIA", disabled=ed_lock),
+            "circuito": st.column_config.TextColumn("CIRCUITO", disabled=ed_lock),
+            "eco": st.column_config.TextColumn("ECO", disabled=True),
+            "modalidad": st.column_config.SelectboxColumn("MODALIDAD", options=disponibilidad.MODALIDADES, disabled=ed_lock),
+            "segmento": st.column_config.SelectboxColumn("SEGMENTO", options=disponibilidad.SEGMENTOS, disabled=ed_lock),
+            "operador": st.column_config.SelectboxColumn("OPERADOR TITULAR", options=bd.opciones_catalogo("operadores", "nombre"),
+                                                         disabled=ed_lock, width="medium"),
+            "estatus_operador": st.column_config.SelectboxColumn("ESTATUS OPERADOR ✏️" if puede_dispo else "ESTATUS OPERADOR",
+                                                                 options=ESTATUS_OPERADOR, disabled=ed_lock),
+            "regresa": st.column_config.DateColumn("REGRESA", format="DD/MM/YYYY", disabled=ed_lock,
+                                                   help="Ese día el operador vuelve solo a ACTIVO"),
+            "situacion": st.column_config.SelectboxColumn("SITUACIÓN UNIDAD ✏️" if puede_dispo else "SITUACIÓN UNIDAD",
+                                                          options=SITUACIONES, disabled=ed_lock,
+                                                          help="De TALLER solo la saca Mantenimiento"),
+            "estatus": st.column_config.TextColumn("ESTATUS 🔒", disabled=True, help="Lo calcula el TMS"),
+            "motivo": st.column_config.TextColumn("MOTIVO 🔒", disabled=True, width="medium"),
+            "r1": st.column_config.TextColumn("R1", disabled=ed_lock),
+            "dolly": st.column_config.TextColumn("DOLLY", disabled=ed_lock),
+            "r2": st.column_config.TextColumn("R2", disabled=ed_lock),
+            "comentarios": st.column_config.TextColumn("COMENTARIOS", disabled=ed_lock, width="large"),
+            "jefe": st.column_config.TextColumn("JEFE / COOR", disabled=ed_lock),
+        }
+        st.caption(f"{len(vista_d)} unidades" + (" · ✏️ = lo capturas tú · 🔒 = lo calcula el TMS" if puede_dispo else
+                                                " · 🔒 solo consulta (lo captura el Jefe Ops)"))
+        ed_d = st.data_editor(vista_d, column_config=cfg_d, hide_index=True, num_rows="fixed", height=520,
+                              key=f"dispo_ed_{st.session_state.get('dispo_ver', 0)}_{f_op}_{f_ci}_{f_es}_{f_bu}",
+                              disabled=ed_lock)
+        g1, g2, _ = st.columns([1.4, 1.6, 4])
+        if puede_dispo and g1.button("💾 Guardar disponibilidad", type="primary", key="dispo_guardar"):
+            camb_d, err_d = disponibilidad.guardar(vista_d, ed_d, USR, "MASTER" if es_master else rol)
+            for e_ in err_d:
+                st.error(e_)
+            if camb_d:
+                st.session_state.dispo_ver = st.session_state.get("dispo_ver", 0) + 1
+                st.toast(f"Disponibilidad guardada: {len(camb_d)} cambios", icon="🟢")
+            if not err_d:
+                st.rerun()
+        g2.download_button("⬇️ Descargar en Excel", tabla_a_excel(vista_d), file_name=f"disponibilidad_{date.today()}.xlsx",
+                           mime=XLSX, key="dispo_xlsx")
+    if puede_dispo:
+        with st.expander("📥 Cargar el Excel CONTROL DE DISPONIBILIDAD (hoja GRAL ER)"):
+            st.caption("Carga operación, circuito, operador titular, remolques y comentarios de cada ECO, el estatus del operador "
+                       "(si el comentario dice 'REGRESA 1 DE DICIEMBRE' se toma como fecha de regreso) y la situación de la "
+                       "unidad (TALLER, SINIESTRO, SEGURIDAD... solo si en el TMS está OPERANDO). EN SERVICIO / DISPONIBLE no se "
+                       "cargan: los calcula el TMS.")
+            arch_d = st.file_uploader("Excel de disponibilidad", type=["xlsx"], key="dispo_excel")
+            if arch_d is not None:
+                b1, b2, _ = st.columns([1.3, 1.5, 4])
+                if b1.button("👀 Revisar sin guardar", key="dispo_probar"):
+                    arch_d.seek(0)
+                    r_ = disponibilidad.importar_excel(arch_d, USR, aplicar=False)
+                    st.info(f"{r_['renglones']} unidades se cargarían · {len(r_['avisos'])} avisos")
+                    for a_ in r_["avisos"]:
+                        st.warning(a_)
+                if b2.button("✅ Cargar disponibilidad", type="primary", key="dispo_cargar"):
+                    arch_d.seek(0)
+                    r_ = disponibilidad.importar_excel(arch_d, USR)
+                    st.session_state.dispo_ver = st.session_state.get("dispo_ver", 0) + 1
+                    st.session_state.mensaje = (f"Disponibilidad cargada ✅  {r_['unidades']} unidades · {r_['operadores']} "
+                                                f"operadores ({r_['ausencias']} ausentes) · {r_['situaciones']} situaciones · "
+                                                f"{len(r_['avisos'])} avisos")
+                    st.session_state.dispo_avisos = r_["avisos"]
+                    st.rerun()
+            for a_ in st.session_state.get("dispo_avisos", []):
+                st.warning(a_)
+
+# ================================================================== USUARIOS OPS (JEFE OPS)
+if "usr" in T:
+  with T["usr"]:
+    st.subheader("👥 Usuarios OPS")
+    st.caption("Como **Jefe Ops** puedes dar de alta usuarios con perfil **OPS** (asignan unidad y operador). "
+               "Para cambiar contraseñas o desactivar usuarios habla con un MASTER.")
+    nv = st.session_state.get("usr_ops_ver", 0)
+    with st.form(f"form_usuario_ops_{nv}"):
+        u1, u2 = st.columns(2)
+        o_user = u1.text_input("USUARIO", help="De 3 a 20 letras o números, sin espacios. Ej: JPEREZ")
+        o_nombre = u2.text_input("NOMBRE")
+        u3, u4 = st.columns(2)
+        o_pwd = u3.text_input("CONTRASEÑA", type="password", help="Mínimo 8 caracteres.")
+        u4.text_input("PERFIL", value="OPS", disabled=True)
+        if st.form_submit_button("➕ Crear usuario OPS", type="primary"):
+            ok_, msg_ = bd.crear_usuario(USR, o_user, o_nombre, o_pwd, "OPS")
+            if ok_:
+                st.session_state.usr_ops_ver = nv + 1
+                st.session_state.mensaje = msg_
+                st.rerun()
+            st.error(msg_)
+    lista_ops = bd.listar_usuarios()
+    lista_ops = lista_ops[lista_ops["perfil"] == "OPS"]
+    st.dataframe(lista_ops[["usuario", "nombre", "activo", "creado", "creado_por", "ultimo_acceso"]].rename(columns=str.upper),
+                 hide_index=True)
+
 # ================================================================== USUARIOS Y BITÁCORA (solo MASTER)
 if "seg" in T and es_master:        # doble candado: la pestaña solo existe para MASTER y se revisa otra vez aquí
   with T["seg"]:
@@ -2383,7 +2562,7 @@ if "seg" in T and es_master:        # doble candado: la pestaña solo existe par
     with sub_u:
         st.markdown("**Crear usuario nuevo**")
         st.caption("Perfiles: **ATC** captura pedidos · **OPS** asigna unidad y operador · **TC** registra tiempos y estatus · "
-                   "**TODOS** solo consulta. Los usuarios MASTER no se crean desde aquí.")
+                   "**TODOS** solo consulta · **JEFE OPS** captura la disponibilidad de la flota y crea usuarios OPS.")
         nu = st.session_state.get("usr_ver", 0)
         with st.form(f"form_usuario_{nu}"):
             c1, c2 = st.columns(2)

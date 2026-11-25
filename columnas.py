@@ -68,7 +68,8 @@ COLUMNAS = [
 TIPO_POR_CLAVE = {c.clave: c.tipo for c in COLUMNAS}
 TITULO_POR_CLAVE = {c.clave: c.titulo for c in COLUMNAS}
 
-ROLES = ["TODOS", "OPS", "ATC", "TC", "ADF", "MTTO"]   # ADF = Admin de Flota · MTTO = Mantenimiento
+ROLES = ["TODOS", "OPS", "ATC", "TC", "ADF", "MTTO", "JEFE OPS"]   # ADF = Admin de Flota · MTTO = Mantenimiento
+                                                                 # JEFE OPS = Disponibilidad de la flota (crea usuarios OPS)
 
 # Estados posibles de una unidad
 ESTADOS_UNIDAD = [
@@ -90,13 +91,19 @@ LISTAS = {
 }
 
 # Situacion de cada vehiculo en el catalogo (vacio = OPERANDO)
-SITUACIONES = ["OPERANDO", "CORRALON", "SINIESTRO", "TALLER", "NO DISPONIBLE", "INACTIVA"]
+SITUACIONES = ["OPERANDO", "CORRALON", "SINIESTRO", "TALLER", "NO DISPONIBLE", "INACTIVA",
+               "SEGURIDAD", "AGENCIA", "DESHABILITACION", "HABILITACION"]   # las 4 ultimas: Control de Disponibilidad
+
+# Estatus del OPERADOR (Control de Disponibilidad). Vacio o ACTIVO = puede trabajar; los demas lo bloquean
+# hasta su fecha de REGRESO (ese dia vuelve solo a ACTIVO).
+ESTATUS_OPERADOR = ["ACTIVO", "DESCANSO", "VACACIONES", "INCAPACIDAD", "PERMISO", "LICENCIA", "AUSENTISMO",
+                    "CAPACITACION", "MEDICO", "AJUSTE DE PLANTILLA", "BAJA"]
 
 # Catalogos: tabla -> columnas (la primera es la llave unica, no se repite)
 CATALOGOS = {
     "unidades": ["eco", "operador", "situacion", "placas", "vin", "marca", "modelo", "anio"],   # placas = assets_id de la vista ZAM; vin/marca/modelo/anio = para el Reporte de Robo
     "remolques": ["remolque", "tipo", "placas", "situacion", "vin"],   # situacion: solo OPERANDO se puede asignar
-    "operadores": ["nomina", "nombre", "telefono"],
+    "operadores": ["nomina", "nombre", "telefono", "estatus", "regresa", "comentario"],   # estatus/regresa = vacaciones, descanso...
     "clientes": ["nombre", "rfc"],
     "origenes": ["nombre", "direccion", "link"],
     "destinos": ["nombre", "localidad", "direccion", "link"],
@@ -135,7 +142,9 @@ PESTANAS = {
     "op": "🚨 Levantar operativo",
     "dyr": "↩️ DYR",                       # devoluciones y rechazos (OPS y MASTER)
     "flota": "🚛 Flota",                   # Admin de Flota
-    "mtto": "🔧 Mantenimiento",            # Mantenimiento       # Reporte de Robo listo para WhatsApp + mapa del tracto y la caja
+    "mtto": "🔧 Mantenimiento",
+    "dispo": "🟢 Disponibilidad",          # Control de disponibilidad de la flota (lo llena JEFE OPS)
+    "usr": "👥 Usuarios OPS",              # JEFE OPS da de alta usuarios OPS
     "cat": "📚 Catálogos",
     "exp": "📤 Exportar CSV",
     "seg": "🔐 Usuarios y bitácora",      # solo usuarios MASTER
@@ -148,7 +157,17 @@ PERMISOS = {
     "TODOS": {"pestanas": ["plan", "exp"],                        "agregar_borrar": False, "editar": False, "zam": False, "monitoreo_editar": False},
     "ADF":   {"pestanas": ["flota"],                              "agregar_borrar": False, "editar": False, "zam": False, "monitoreo_editar": False},
     "MTTO":  {"pestanas": ["mtto"],                               "agregar_borrar": False, "editar": False, "zam": False, "monitoreo_editar": False},
+    # JEFE OPS: ve todo SOLO LECTURA; edita Disponibilidad y los catalogos de vehiculos y operadores; crea usuarios OPS
+    "JEFE OPS": {"pestanas": ["dispo", "plan", "mon", "dyr", "cat", "exp", "usr"], "agregar_borrar": False, "editar": False,
+                 "zam": False, "monitoreo_editar": False, "catalogos": ["unidades", "operadores"], "dispo_editar": True,
+                 "dyr_editar": False},
 }
+# Por perfil: que catalogos puede guardar (si no se dice: todos los que ve) y si edita la Disponibilidad
+for _p in PERMISOS.values():
+    _p.setdefault("catalogos", None)
+    _p.setdefault("dispo_editar", False)
+    _p.setdefault("dyr_editar", True)
+PERMISOS["OPS"]["pestanas"].insert(PERMISOS["OPS"]["pestanas"].index("cat"), "dispo")   # OPS la consulta
 
 # Que significa "pendiente" para cada perfil (filtro rapido del Plan del dia)
 PENDIENTES = {

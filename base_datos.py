@@ -10,7 +10,7 @@ import pandas as pd
 
 import configuracion as cfg
 import nube
-from columnas import COLUMNAS, TIPO_POR_CLAVE, CATALOGOS, SITUACIONES
+from columnas import COLUMNAS, TIPO_POR_CLAVE, CATALOGOS, SITUACIONES, ESTATUS_OPERADOR
 
 RUTA_BD = Path(__file__).parent / cfg.ARCHIVO_BD
 AHORA_TXT = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -24,6 +24,18 @@ def situacion_valida(valor):
     t = {"INOPERANDO": "NO DISPONIBLE", "INOPERATIVO": "NO DISPONIBLE", "BAJA": "NO DISPONIBLE",
          "EN TALLER": "TALLER", "SINIESTRADO": "SINIESTRO"}.get(t, t)
     return t if t in SITUACIONES else None
+
+
+def estatus_operador_valido(valor):
+    """'Vacaciones', 'capacitación' -> opcion de ESTATUS_OPERADOR. Vacio o desconocido -> None (= ACTIVO)."""
+    if valor is None:
+        return None
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(valor)).encode("ascii", "ignore").decode()
+    t = " ".join(t.strip().upper().split())
+    t = {"VACACION": "VACACIONES", "INCAPACITADO": "INCAPACIDAD", "DISPONIBLE": "ACTIVO", "EN SERVICIO": "ACTIVO",
+         "PROGRAMADA": "ACTIVO", "PROGRAMADO": "ACTIVO", "SIN OPERADOR": None}.get(t, t)
+    return t if t in ESTATUS_OPERADOR and t != "ACTIVO" else None
 
 
 def _situacion_por_defecto(con):
@@ -130,9 +142,10 @@ def _crear_tablas():
         con.execute("CREATE TABLE IF NOT EXISTS operativos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, "
                     "usuario TEXT, eco TEXT, remolque TEXT, tipo TEXT, texto TEXT)")
         # viajes que el sistema cree terminados pero les faltan horas: TC confirma (pudo haber devolucion)
-        import dyr as _dyr, mantenimiento as _mtto          # devoluciones (DYR) y mantenimientos programados
+        import dyr as _dyr, mantenimiento as _mtto, disponibilidad as _dispo   # DYR, mantenimientos, disponibilidad
         _dyr.crear_tabla(con)
         _mtto.crear_tabla(con)
+        _dispo.crear_tabla(con)
         # viajes con varias paradas (La Comer: tiendas · Dliver: destinos)
         con.execute("CREATE TABLE IF NOT EXISTS paradas (id INTEGER PRIMARY KEY AUTOINCREMENT, viaje_id INTEGER, "
                     "orden INTEGER, lugar TEXT, cita TEXT, entrada TEXT, salida TEXT, notas TEXT, modificado TEXT)")
@@ -344,6 +357,9 @@ def reemplazar_catalogo(tabla, df):
                 continue
             if "situacion" in cols:
                 vals[cols.index("situacion")] = situacion_valida(vals[cols.index("situacion")])
+            if tabla == "operadores":
+                vals[cols.index("estatus")] = estatus_operador_valido(vals[cols.index("estatus")])
+                vals[cols.index("regresa")] = (vals[cols.index("regresa")] or "")[:10] or None
             marcas = ", ".join("?" for _ in cols)
             con.execute(f"INSERT OR REPLACE INTO {tabla} ({', '.join(cols)}) VALUES ({marcas})", vals)
     autocompletar_desde_catalogos()
@@ -692,7 +708,8 @@ def aprender_link(lado, nombre, link):
 # ---------------------------------------------------------- usuarios y acceso
 # Los usuarios MASTER (los unicos que crean usuarios). Las contrasenas NO estan en el codigo: solo su huella (hash).
 USUARIOS_MASTER = [('JLMAR', 'Jose Luis Mar Sierra', 'pbkdf2$200000$466e55827687abe0c0f2a921607d3d6e$e44c39775fce50c07fad98910f884ad8002cf002c826e2a677bd4dfc34f59209'), ('OAARE', 'Omar Ali Arenas', 'pbkdf2$200000$246b2ec12ad9d1901498c544bf479839$4675fb9590dcb4404aea17a6e96ed351ca15fed8baef4acb150ad8793e2dddbc')]
-PERFILES_CREABLES = ["TC", "OPS", "ATC", "TODOS", "ADF", "MTTO", "MASTER"]   # solo un MASTER crea usuarios (y otros MASTER)
+PERFILES_CREABLES = ["TC", "OPS", "ATC", "TODOS", "ADF", "MTTO", "JEFE OPS", "MASTER"]   # MASTER crea cualquiera (y otros MASTER)
+CREA_JEFE_OPS = ["OPS"]                       # JEFE OPS solo puede dar de alta usuarios OPS
 
 
 def hash_pwd(pwd, sal=None, iteraciones=200_000):
@@ -754,10 +771,14 @@ def listar_usuarios():
 
 
 def crear_usuario(quien, usuario, nombre, pwd, perfil):
-    """Solo MASTER (y solo un MASTER puede crear otro MASTER). Devuelve (ok, mensaje)."""
+    """MASTER crea cualquier perfil (incluso MASTER). JEFE OPS solo crea usuarios OPS. Devuelve (ok, mensaje)."""
     import re
-    if not isinstance(quien, dict) or quien.get("perfil") != "MASTER":
-        return False, "Solo un usuario MASTER puede crear usuarios."
+    quien_perfil = quien.get("perfil") if isinstance(quien, dict) else None
+    if quien_perfil == "JEFE OPS":
+        if perfil not in CREA_JEFE_OPS:
+            return False, "Como JEFE OPS solo puedes crear usuarios con perfil OPS."
+    elif quien_perfil != "MASTER":
+        return False, "Solo un usuario MASTER (o JEFE OPS, para perfil OPS) puede crear usuarios."
     usuario, nombre = (usuario or "").strip().upper(), (nombre or "").strip()
     if perfil not in PERFILES_CREABLES:
         return False, "Perfil no permitido. Elige " + ", ".join(PERFILES_CREABLES) + "."

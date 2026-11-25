@@ -7,6 +7,7 @@
 #   2) La unidad, el operador o el remolque siguen ACTIVOS:
 #        - tienen otro viaje en el TMS sin ✅ finalizar ni ❌ cancelar, o
 #        - (unidad / operador) tienen un viaje 'open' en la vista ZAM.
+#   3) El operador no esta ACTIVO en Disponibilidad (descanso, vacaciones, incapacidad...) hasta su fecha de regreso.
 #  Para liberarlos: marca ✅ o ❌ en su viaje anterior y guarda.
 # ==========================================================
 import pandas as pd
@@ -57,6 +58,9 @@ class Contexto:
         # devoluciones (DYR) sin liberar por el MASTER: su unidad y su caja no se pueden asignar
         import dyr
         self.dyr = dyr.bloqueados()
+        # operadores que hoy no pueden trabajar (Disponibilidad: vacaciones, descanso...) {nombre/nomina: motivo}
+        import disponibilidad
+        self.op_ausente = disponibilidad.operadores_no_disponibles()
 
     # ---------------------------------------------------- quien ocupa que
     def _viaje_tms(self, columna, llave, excluir_id):
@@ -100,6 +104,8 @@ class Contexto:
     def operador_asignable(self, nombre):
         k = _k(nombre)
         nomina = self.nomina_de.get(k, "")
+        if k in self.op_ausente or (nomina and nomina in self.op_ausente):
+            return False
         return (self._viaje_tms_operador(k, nomina, None) is None
                 and self._viaje_zam("nomina", nomina) is None)
 
@@ -161,6 +167,10 @@ def validar(propuestas, ctx=None):
 
         if nombre or nomina:
             mostrar = p.get("operador") or ctx.operador_habitual.get(eco) or nomina
+            ausente = ctx.op_ausente.get(nombre) or (ctx.op_ausente.get(nomina) if nomina else None)
+            if ausente:
+                errores.append(f"{etq}: el operador {mostrar} no está disponible: {ausente}. "
+                               "Lo cambia el JEFE OPS en 🟢 Disponibilidad.")
             v = ctx._viaje_tms_operador(nombre, nomina, id_)
             if v is not None:
                 errores.append(f"{etq}: el operador {mostrar} sigue activo en el {_desc_tms(v)}. "
