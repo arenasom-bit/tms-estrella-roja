@@ -218,13 +218,18 @@ def leer_archivo(archivo):
 ORDEN_CARGA = ["clientes", "operadores", "unidades", "remolques", "tipos_operacion", "origenes", "destinos", "estadias"]
 
 
-def cargar_catalogos(archivo):
-    """Lee el Excel y lo carga. Devuelve (tipo_de_archivo, {tabla: {nuevos, actualizados}})."""
+def cargar_catalogos(archivo, proteger=None):
+    """Lee el Excel y lo carga. proteger = {tabla: [columnas]} que NO se toman del Excel (las deja como estan).
+    Devuelve (tipo_de_archivo, {tabla: {nuevos, actualizados}})."""
     tipo, frames = leer_archivo(archivo)
     resumen = {}
     for tabla in ORDEN_CARGA:
         if tabla in frames:
-            resumen[tabla] = bd.catalogo_upsert(tabla, frames[tabla])
+            f = frames[tabla].copy()
+            for c in (proteger or {}).get(tabla, []):
+                if c in f.columns:
+                    f[c] = None                       # vacio = catalogo_upsert no lo toca
+            resumen[tabla] = bd.catalogo_upsert(tabla, f)
     return tipo, resumen
 
 

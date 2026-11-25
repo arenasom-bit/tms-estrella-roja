@@ -162,6 +162,10 @@ PERMISOS = {
                  "zam": False, "monitoreo_editar": False, "catalogos": ["unidades", "operadores"], "dispo_editar": True,
                  "dyr_editar": False},
 }
+# Columnas de catalogo que solo cambian JEFE OPS y MASTER (Control de disponibilidad). Para los demas: 🔒
+PROTEGIDAS_DISPO = {"operadores": ["estatus", "regresa", "comentario"], "unidades": ["operador", "situacion"]}
+PERFILES_DISPO = ["JEFE OPS", "MASTER"]
+
 # Por perfil: que catalogos puede guardar (si no se dice: todos los que ve) y si edita la Disponibilidad
 for _p in PERMISOS.values():
     _p.setdefault("catalogos", None)

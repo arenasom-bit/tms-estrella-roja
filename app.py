@@ -61,7 +61,7 @@ import usuarios_excel
 import zam
 from columnas import (CATALOGO_DE, CATALOGOS, COLUMNAS, CONTEXTO, ESTATUS_CERRADOS, FICHA_REQUERIDOS, LISTAS,
                       PENDIENTES, PERMISOS, PESTANAS, ROLES, SITUACIONES, TIPO_POR_CLAVE, TITULO_POR_CLAVE,
-                      ESTATUS_OPERADOR)
+                      ESTATUS_OPERADOR, PERFILES_DISPO, PROTEGIDAS_DISPO)
 
 VERSION_TMS = "12/11 v4"            # se ve en la pantalla de entrada: sirve para saber que version esta publicada
 st.set_page_config(page_title="TMS · Estrella Roja",
@@ -1944,7 +1944,8 @@ if "cat" in T:
             archivo = st.file_uploader("Sube tu Excel", type=["xlsx"])
             if archivo is not None and st.button("Cargar catálogos", type="primary"):
                 try:
-                    tipo_arch, resumen = catalogos_excel.cargar_catalogos(archivo)
+                    tipo_arch, resumen = catalogos_excel.cargar_catalogos(
+                    archivo, proteger=None if (es_master or rol in PERFILES_DISPO) else PROTEGIDAS_DISPO)
                     partes = [f"{t}: {r['nuevos']} nuevos, {r['actualizados']} actualizados" for t, r in resumen.items()]
                     bd.bitacora(USR, "CATALOGO_EXCEL_CARGADO", tipo_arch, " · ".join(partes))
                     st.session_state.version += 1
@@ -2012,6 +2013,8 @@ if "cat" in T:
                     except ValueError as e:
                         st.error(str(e))
 
+    puede_dispo_cat = es_master or rol in PERFILES_DISPO
+
     def editor_catalogo(tabla, config=None):
         df_c = bd.leer_catalogo(tabla)
         if tabla == "operadores":
@@ -2021,10 +2024,23 @@ if "cat" in T:
             st.caption("🔒 Solo consulta para tu perfil.")
             st.dataframe(df_c, hide_index=True, column_config=config or {})
             return
+        protegidas = [] if puede_dispo_cat else PROTEGIDAS_DISPO.get(tabla, [])
+        cfg_e = dict(config or {})
+        for c in protegidas:                   # solo JEFE OPS / MASTER: se ven con 🔒
+            v = cfg_e.get(c)
+            titulo = (v.get("label") if isinstance(v, dict) else v) or c.upper()
+            cfg_e[c] = st.column_config.Column(f"{titulo} 🔒", disabled=True,
+                                               help="Lo cambia el JEFE OPS (Control de disponibilidad)")
         ed = st.data_editor(df_c, key=f"cat_{tabla}_{st.session_state.version}", num_rows="dynamic",
-                            hide_index=True, column_config=config or {})
+                            hide_index=True, column_config=cfg_e)
         if st.button("💾 Guardar", key=f"btn_{tabla}"):
             antes_n = len(df_c)
+            if protegidas:                     # doble candado: lo protegido se queda como estaba
+                llave = CATALOGOS[tabla][0]
+                ant_p = df_c.set_index(df_c[llave].astype(str))
+                ed = ed.copy()
+                for c in protegidas:
+                    ed[c] = ed[llave].astype(str).map(lambda k, c=c: ant_p[c].get(k) if k in ant_p.index else None)
             if tabla == "unidades" and not es_master:          # de TALLER solo saca Mantenimiento
                 ant_sit = dict(zip(df_c["eco"].astype(str), df_c["situacion"].fillna("OPERANDO")))
                 malos = [str(e) for e, sn in zip(ed["eco"].astype(str), ed["situacion"].fillna("OPERANDO"))
@@ -2047,7 +2063,6 @@ if "cat" in T:
             "operador": st.column_config.SelectboxColumn(
                 "OPERADOR HABITUAL", options=bd.opciones_catalogo("operadores", "nombre")),
             "situacion": st.column_config.SelectboxColumn("SITUACIÓN", options=SITUACIONES,
-                                                          disabled=not (es_master or rol == "JEFE OPS"),
                                                           help="La cambia el Admin de Flota, el Jefe Ops (o Mantenimiento: TALLER)"),
             "placas": "PLACAS", "vin": "VIN", "marca": "MARCA", "modelo": "MODELO", "anio": "AÑO"})
     with sub[1]:
